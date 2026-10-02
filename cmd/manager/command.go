@@ -4,12 +4,14 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
 
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 
 	controller "go.miloapis.com/email-provider-loops/internal"
 	loops "go.miloapis.com/email-provider-loops/pkg/loops"
@@ -141,18 +143,22 @@ func CreateManagerCommand() *cobra.Command {
 			utilruntime.Must(iammiloapiscomv1alpha1.AddToScheme(scheme))
 			utilruntime.Must(notificationmiloapiscomv1alpha1.AddToScheme(scheme))
 
-			mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-				Scheme:                     scheme,
-				Metrics:                    metricsServerOptions,
-				WebhookServer:              webhookServer,
-				HealthProbeBindAddress:     probeAddr,
-				LeaderElection:             enableLeaderElection,
-				LeaderElectionID:           leaderElectionID,
-				LeaderElectionNamespace:    leaderElectionNamespace,
-				LeaderElectionResourceLock: leaderElectionResourceLock,
-				LeaseDuration:              &leaseDuration,
-				RenewDeadline:              &renewDeadline,
-				RetryPeriod:                &retryPeriod,
+			restCfg := ctrl.GetConfigOrDie()
+
+			mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
+				Scheme:                        scheme,
+				Metrics:                       metricsServerOptions,
+				WebhookServer:                 webhookServer,
+				HealthProbeBindAddress:        probeAddr,
+				LeaderElection:                enableLeaderElection,
+				LeaderElectionID:              leaderElectionID,
+				LeaderElectionNamespace:       leaderElectionNamespace,
+				LeaderElectionResourceLock:    leaderElectionResourceLock,
+				LeaseDuration:                 &leaseDuration,
+				RenewDeadline:                 &renewDeadline,
+				RetryPeriod:                   &retryPeriod,
+				LeaderElectionConfig:          leaderElectionRestConfig(restCfg),
+				LeaderElectionReleaseOnCancel: true,
 			})
 			if err != nil {
 				setupLog.Error(err, "unable to start manager")
@@ -277,4 +283,21 @@ func CreateManagerCommand() *cobra.Command {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	return cmd
+}
+
+const (
+	leaderElectionQPS   = 5
+	leaderElectionBurst = 10
+)
+
+func leaderElectionRestConfig(base *rest.Config) *rest.Config {
+	cfg := rest.CopyConfig(base)
+	cfg.RateLimiter = nil
+	cfg.QPS = leaderElectionQPS
+	cfg.Burst = leaderElectionBurst
+	cfg.Dial = (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	return cfg
 }
