@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 
 	"go.miloapis.com/email-provider-loops/internal/util"
@@ -32,6 +33,12 @@ const (
 	loopsContactGroupMembershipFinalizerKey = "notification.miloapis.com/loops-contact-group-membership"
 )
 
+// errMailingListIDNotFound is returned by getMailingListId when the referenced
+// ContactGroup has no Loops provider configured. It is treated as a terminal
+// condition by the finalizer: without a mailing list ID, no Loops-side
+// membership can exist for this ContactGroupMembership.
+var errMailingListIDNotFound = stderrors.New("mailing list ID not found for contact group")
+
 // LoopsContactGroupMembershipReconciler reconciles a LoopsContact object
 type LoopsContactGroupMembershipController struct {
 	Client     client.Client
@@ -61,6 +68,15 @@ func (f *loopsContactGroupMembershipFinalizer) Finalize(ctx context.Context, obj
 	// Get referenced resources
 	contact, contactGroup, err := getReferencedResources(ctx, f.Client, cgm)
 	if err != nil {
+		// If the referenced Contact or ContactGroup no longer exists, the
+		// Loops-side membership either was already cleaned up (by the Contact
+		// finalizer, which removes the Loops contact from all mailing lists) or
+		// no longer matters. Hard-failing here would deadlock the finalizer
+		// (and the parent ContactGroup deletion), so complete instead.
+		if errors.IsNotFound(err) {
+			log.Info("Referenced Contact or ContactGroup not found. Probably deleted. ContactGroupMembership finalizer completed.")
+			return finalizer.Result{}, nil
+		}
 		log.Error(err, "Failed to get referenced resources")
 		finalizerError = fmt.Errorf("failed to get referenced resources: %w", err)
 	}
@@ -69,6 +85,13 @@ func (f *loopsContactGroupMembershipFinalizer) Finalize(ctx context.Context, obj
 	if finalizerError == nil {
 		err = f.removeContactFromMailingList(ctx, contact, contactGroup)
 		if err != nil {
+			if errors.IsNotFound(err) || loops.IsNotFound(err) || stderrors.Is(err, errMailingListIDNotFound) {
+				// Nothing exists on the Loops side for this membership anymore
+				// (or the group was never configured with a Loops mailing
+				// list), so the finalizer can complete.
+				log.Info("Loops membership not found, probably deleted already. ContactGroupMembership finalizer completed.")
+				return finalizer.Result{}, nil
+			}
 			log.Error(err, "Failed to delete Loops contact")
 			finalizerError = fmt.Errorf("failed to delete Loops contact: %w", err)
 		}
@@ -288,7 +311,7 @@ func getMailingListId(cg *notificationmiloapiscomv1alpha1.ContactGroup) (string,
 		}
 	}
 
-	return "", fmt.Errorf("mailing list ID not found for contact group")
+	return "", errMailingListIDNotFound
 }
 
 func getReferencedResources(ctx context.Context, k8sClient client.Client, cgm *notificationmiloapiscomv1alpha1.ContactGroupMembership) (*notificationmiloapiscomv1alpha1.Contact, *notificationmiloapiscomv1alpha1.ContactGroup, error) {
