@@ -13,9 +13,14 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/finalizer"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 const (
@@ -229,10 +234,58 @@ func (r *LoopsContactGroupMembershipController) SetupWithManager(mgr ctrl.Manage
 		return fmt.Errorf("failed to register loops contact group membership finalizer: %w", err)
 	}
 
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &notificationmiloapiscomv1alpha1.ContactGroupMembership{}, membershipsByGroupIndex, membershipGroupKey); err != nil {
+		return fmt.Errorf("failed to index contact group memberships by contact group: %w", err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&notificationmiloapiscomv1alpha1.ContactGroupMembership{}).
+		Watches(
+			&notificationmiloapiscomv1alpha1.ContactGroup{},
+			handler.EnqueueRequestsFromMapFunc(r.membershipsOfGroup),
+			builder.WithPredicates(groupSpecChanged()),
+		).
 		Named("loopscontactgroupmembership").
 		Complete(r)
+}
+
+// membershipsByGroupIndex indexes ContactGroupMemberships by the contact group they reference.
+const membershipsByGroupIndex = "contactgroup-namespaced-index"
+
+func membershipGroupKey(obj client.Object) []string {
+	cgm := obj.(*notificationmiloapiscomv1alpha1.ContactGroupMembership)
+	return []string{groupKey(cgm.Spec.ContactGroupRef.Namespace, cgm.Spec.ContactGroupRef.Name)}
+}
+
+func groupKey(namespace, name string) string {
+	return namespace + "|" + name
+}
+
+// membershipsOfGroup enqueues every membership of a contact group, so a group that starts listing Loops reaches
+// the memberships its earlier reconciles skipped without waiting for the cache's resync.
+func (r *LoopsContactGroupMembershipController) membershipsOfGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	memberships := &notificationmiloapiscomv1alpha1.ContactGroupMembershipList{}
+	if err := r.Client.List(ctx, memberships, client.MatchingFields{membershipsByGroupIndex: groupKey(obj.GetNamespace(), obj.GetName())}); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to list the memberships of a contact group", "contactGroup", client.ObjectKeyFromObject(obj))
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(memberships.Items))
+	for i := range memberships.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&memberships.Items[i])})
+	}
+	return requests
+}
+
+// groupSpecChanged passes a contact group's spec updates only: its provider list is what a membership reads.
+func groupSpecChanged() predicate.Funcs {
+	return predicate.Funcs{
+		CreateFunc:  func(event.CreateEvent) bool { return false },
+		DeleteFunc:  func(event.DeleteEvent) bool { return false },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration()
+		},
+	}
 }
 
 // ensureOnMailingList adds the contact to the group's Loops mailing list and records the outcome on the
