@@ -143,10 +143,13 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
-	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
+	cd config/base && $(KUSTOMIZE) edit set image ghcr.io/milo-os/loops-provider=${IMG}
 	$(KUSTOMIZE) build config/default > dist/install.yaml
 
 ##@ Deployment
+
+# DEPLOY_CONFIG is the kustomization deploy and undeploy render; the end-to-end suite passes test/e2e/config.
+DEPLOY_CONFIG ?= config/default
 
 ifndef ignore-not-found
   ignore-not-found = false
@@ -162,12 +165,12 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
+	cd config/base && $(KUSTOMIZE) edit set image ghcr.io/milo-os/loops-provider=${IMG}
+	$(KUSTOMIZE) build $(DEPLOY_CONFIG) | $(KUBECTL) apply -f -
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+	$(KUSTOMIZE) build $(DEPLOY_CONFIG) | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
 ##@ Dependencies
 

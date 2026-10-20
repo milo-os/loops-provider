@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2" // nolint:revive,staticcheck
@@ -161,6 +162,20 @@ func GetNonEmptyLines(output string) []string {
 	}
 
 	return res
+}
+
+// MiloNotificationCRDs returns the directory of Milo's notification CRDs at the Milo version go.mod requires. The
+// provider reconciles Milo's notification kinds and defines no CRD of its own.
+func MiloNotificationCRDs() (string, error) {
+	out, err := Run(exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "go.miloapis.com/milo"))
+	if err != nil {
+		return "", err
+	}
+	dir := strings.TrimSpace(out)
+	if dir == "" {
+		return "", fmt.Errorf("the go.miloapis.com/milo module is not downloaded")
+	}
+	return filepath.Join(dir, "config", "crd", "bases", "notification"), nil
 }
 
 // GetProjectDir will return the directory where the project is
