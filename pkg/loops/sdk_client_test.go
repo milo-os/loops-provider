@@ -3,6 +3,8 @@ package loops
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -282,5 +284,32 @@ func TestWithHTTPClient(t *testing.T) {
 	// For coverage, ensuring the option function runs is enough.
 	if sdk == nil {
 		t.Error("SDK should not be nil")
+	}
+}
+
+func TestIsInvalidMailingList(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"Loops' 400 for a mailing list it does not have", &Error{StatusCode: http.StatusBadRequest,
+			Body: `{"success":false,"message":"Invalid mailing lists: list-1"}`}, true},
+		{"the same, wrapped", fmt.Errorf("remove: %w", &Error{StatusCode: http.StatusBadRequest,
+			Body: `{"success":false,"message":"Invalid mailing lists: list-1"}`}), true},
+		{"another 400", &Error{StatusCode: http.StatusBadRequest,
+			Body: `{"success":false,"message":"Invalid email"}`}, false},
+		{"a 400 whose body is not JSON", &Error{StatusCode: http.StatusBadRequest, Body: "Invalid mailing lists"}, false},
+		{"the message on another status", &Error{StatusCode: http.StatusNotFound,
+			Body: `{"success":false,"message":"Invalid mailing lists: list-1"}`}, false},
+		{"not a Loops error", errors.New("Invalid mailing lists: list-1"), false},
+		{"no error", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsInvalidMailingList(tc.err); got != tc.want {
+				t.Errorf("IsInvalidMailingList(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }

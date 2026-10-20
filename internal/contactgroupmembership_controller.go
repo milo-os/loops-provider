@@ -44,6 +44,15 @@ const (
 // membership can exist for this ContactGroupMembership.
 var errMailingListIDNotFound = stderrors.New("mailing list ID not found for contact group")
 
+// loopsMembershipGone reports whether removing a contact from the group's mailing list failed because nothing
+// exists on the Loops side for the membership anymore, so the finalizer can complete: a referenced object is
+// gone, Loops does not have the contact, the group was never configured with a Loops mailing list, or Loops does
+// not have the mailing list the group names.
+func loopsMembershipGone(err error) bool {
+	return errors.IsNotFound(err) || loops.IsNotFound(err) || stderrors.Is(err, errMailingListIDNotFound) ||
+		loops.IsInvalidMailingList(err)
+}
+
 // LoopsContactGroupMembershipReconciler reconciles a LoopsContact object
 type LoopsContactGroupMembershipController struct {
 	Client     client.Client
@@ -90,11 +99,8 @@ func (f *loopsContactGroupMembershipFinalizer) Finalize(ctx context.Context, obj
 	if finalizerError == nil {
 		err = f.removeContactFromMailingList(ctx, contact, contactGroup)
 		if err != nil {
-			if errors.IsNotFound(err) || loops.IsNotFound(err) || stderrors.Is(err, errMailingListIDNotFound) {
-				// Nothing exists on the Loops side for this membership anymore
-				// (or the group was never configured with a Loops mailing
-				// list), so the finalizer can complete.
-				log.Info("Loops membership not found, probably deleted already. ContactGroupMembership finalizer completed.")
+			if loopsMembershipGone(err) {
+				log.Info("Loops membership not found, probably deleted already. ContactGroupMembership finalizer completed.", "reason", err.Error())
 				return finalizer.Result{}, nil
 			}
 			log.Error(err, "Failed to delete Loops contact")
