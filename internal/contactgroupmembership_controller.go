@@ -195,38 +195,7 @@ func (r *LoopsContactGroupMembershipController) Reconcile(ctx context.Context, r
 
 	if (readyCond == nil || readyCond.Reason == LoopsContactGroupMembershipNotCreatedReason) && reconcileError == nil {
 		log.Info("LoopsContact creation")
-
-		err = r.addContactToMailingList(ctx, contact, contactGroup)
-		if err != nil {
-			reconcileError = err
-			log.Error(err, "Failed to add contact to mailing list")
-			meta.SetStatusCondition(&cgm.Status.Conditions, metav1.Condition{
-				Type:               LoopsContactGroupMembershipReadyCondition,
-				Status:             metav1.ConditionFalse,
-				Reason:             LoopsContactGroupMembershipNotCreatedReason,
-				Message:            fmt.Sprintf("Loops contact group membership not created on email provider: %s", err.Error()),
-				LastTransitionTime: metav1.Now(),
-				ObservedGeneration: cgm.GetGeneration(),
-			})
-		}
-
-		if err == nil {
-			log.Info("Loops contact group membership created")
-			meta.SetStatusCondition(&cgm.Status.Conditions, metav1.Condition{
-				Type:               LoopsContactGroupMembershipReadyCondition,
-				Status:             metav1.ConditionTrue,
-				Reason:             LoopsContactGroupMembershipCreatedReason,
-				Message:            "Loops contact group membership created on email provider",
-				LastTransitionTime: metav1.Now(),
-				ObservedGeneration: cgm.GetGeneration(),
-			})
-			cgm.Status.Providers = []notificationmiloapiscomv1alpha1.ContactProviderStatus{
-				{
-					Name: "Loops",
-					ID:   string(contact.UID),
-				},
-			}
-		}
+		reconcileError = r.ensureOnMailingList(ctx, cgm, contact, contactGroup)
 	}
 
 	if err := util.PatchStatusIfChanged(ctx, util.StatusPatchParams{
@@ -264,6 +233,53 @@ func (r *LoopsContactGroupMembershipController) SetupWithManager(mgr ctrl.Manage
 		For(&notificationmiloapiscomv1alpha1.ContactGroupMembership{}).
 		Named("loopscontactgroupmembership").
 		Complete(r)
+}
+
+// ensureOnMailingList adds the contact to the group's Loops mailing list and records the outcome on the
+// membership's Loops condition. A group that does not list Loops needs nothing from Loops, so its membership
+// carries no Loops condition and no error. A group that lists Loops without a mailing list ID is reported on
+// the condition without an error, because no retry can succeed until the group itself changes.
+func (r *LoopsContactGroupMembershipController) ensureOnMailingList(ctx context.Context, cgm *notificationmiloapiscomv1alpha1.ContactGroupMembership, c *notificationmiloapiscomv1alpha1.Contact, cg *notificationmiloapiscomv1alpha1.ContactGroup) error {
+	log := logf.FromContext(ctx)
+	provider, listed := loopsProvider(cg)
+	switch {
+	case !listed:
+		log.Info("Contact group does not list Loops, nothing to sync")
+		meta.RemoveStatusCondition(&cgm.Status.Conditions, LoopsContactGroupMembershipReadyCondition)
+		return nil
+	case provider.ID == "":
+		log.Info("Contact group lists Loops without a mailing list ID")
+		setLoopsReady(cgm, metav1.ConditionFalse, LoopsContactGroupMembershipNotCreatedReason, "Contact group lists Loops but has no mailing list ID")
+		return nil
+	}
+
+	if err := r.addContactToMailingList(ctx, c, cg); err != nil {
+		log.Error(err, "Failed to add contact to mailing list")
+		setLoopsReady(cgm, metav1.ConditionFalse, LoopsContactGroupMembershipNotCreatedReason, fmt.Sprintf("Loops contact group membership not created on email provider: %s", err.Error()))
+		return err
+	}
+
+	log.Info("Loops contact group membership created")
+	setLoopsReady(cgm, metav1.ConditionTrue, LoopsContactGroupMembershipCreatedReason, "Loops contact group membership created on email provider")
+	cgm.Status.Providers = []notificationmiloapiscomv1alpha1.ContactProviderStatus{
+		{
+			Name: "Loops",
+			ID:   string(c.UID),
+		},
+	}
+	return nil
+}
+
+// setLoopsReady sets the membership's Loops condition.
+func setLoopsReady(cgm *notificationmiloapiscomv1alpha1.ContactGroupMembership, status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(&cgm.Status.Conditions, metav1.Condition{
+		Type:               LoopsContactGroupMembershipReadyCondition,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: cgm.GetGeneration(),
+	})
 }
 
 func (r *LoopsContactGroupMembershipController) addContactToMailingList(ctx context.Context, c *notificationmiloapiscomv1alpha1.Contact, cg *notificationmiloapiscomv1alpha1.ContactGroup) error {
@@ -305,13 +321,22 @@ func (f *loopsContactGroupMembershipFinalizer) removeContactFromMailingList(ctx 
 }
 
 func getMailingListId(cg *notificationmiloapiscomv1alpha1.ContactGroup) (string, error) {
-	for _, provider := range cg.Spec.Providers {
-		if provider.Name == "Loops" {
-			return provider.ID, nil
-		}
+	if provider, listed := loopsProvider(cg); listed {
+		return provider.ID, nil
 	}
 
 	return "", errMailingListIDNotFound
+}
+
+// loopsProvider returns the group's Loops provider entry, and whether the group lists one.
+func loopsProvider(cg *notificationmiloapiscomv1alpha1.ContactGroup) (notificationmiloapiscomv1alpha1.ContactGroupProviderSpec, bool) {
+	for _, provider := range cg.Spec.Providers {
+		if provider.Name == "Loops" {
+			return provider, true
+		}
+	}
+
+	return notificationmiloapiscomv1alpha1.ContactGroupProviderSpec{}, false
 }
 
 func getReferencedResources(ctx context.Context, k8sClient client.Client, cgm *notificationmiloapiscomv1alpha1.ContactGroupMembership) (*notificationmiloapiscomv1alpha1.Contact, *notificationmiloapiscomv1alpha1.ContactGroup, error) {
