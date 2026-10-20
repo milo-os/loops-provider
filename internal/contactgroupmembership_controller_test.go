@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	loops "go.miloapis.com/email-provider-loops/pkg/loops"
@@ -17,9 +18,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/finalizer"
 )
 
-// recordingLoops is a loops.API that records every mailing list addition and succeeds.
+// recordingLoops is a loops.API that records every mailing list addition and succeeds. A manager calls it from
+// its own goroutines, so reads go through snapshot.
 type recordingLoops struct {
+	mu    sync.Mutex
 	added []string
+}
+
+func (l *recordingLoops) snapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.added...)
 }
 
 func (l *recordingLoops) UpsertContact(context.Context, loops.ContactRequest) (*loops.APIResponse, error) {
@@ -31,6 +40,8 @@ func (l *recordingLoops) DeleteContact(context.Context, string) (*loops.APIRespo
 }
 
 func (l *recordingLoops) AddToMailingList(_ context.Context, userID, listID string) (*loops.APIResponse, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.added = append(l.added, userID+"/"+listID)
 	return &loops.APIResponse{Success: true}, nil
 }
@@ -72,6 +83,7 @@ func newMembershipController(t *testing.T, api loops.API, objs ...client.Object)
 		t.Fatalf("failed to register notification types in scheme: %v", err)
 	}
 	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(objs...).
+		WithIndex(&notificationv1.ContactGroupMembership{}, membershipsByGroupIndex, membershipGroupKey).
 		WithStatusSubresource(&notificationv1.ContactGroupMembership{}).Build()
 	fs := finalizer.NewFinalizers()
 	if err := fs.Register(loopsContactGroupMembershipFinalizerKey, &loopsContactGroupMembershipFinalizer{Client: c, Loops: api}); err != nil {
