@@ -63,13 +63,23 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
+		By("installing Milo's notification CRDs")
+		crds, err := utils.MiloNotificationCRDs()
+		Expect(err).NotTo(HaveOccurred(), "Failed to find Milo's notification CRDs")
+		cmd = exec.Command("kubectl", "apply", "--server-side", "-k", crds)
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
+		// The controller manager and the webhook read their Loops credentials from this Secret, which
+		// production provides. The suite never calls Loops, so placeholder values are enough.
+		By("creating the Loops keys the deployments read")
+		cmd = exec.Command("kubectl", "create", "secret", "generic", "loops-keys", "-n", namespace,
+			"--from-literal=LOOPS_API_KEY=e2e", "--from-literal=LOOPS_SIGNING_SECRET=e2e")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to create the Loops keys")
+
 		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
+		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage), "DEPLOY_CONFIG=test/e2e/config")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
@@ -82,12 +92,14 @@ var _ = Describe("Manager", Ordered, func() {
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
+		cmd = exec.Command("make", "undeploy", "DEPLOY_CONFIG=test/e2e/config")
 		_, _ = utils.Run(cmd)
 
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
-		_, _ = utils.Run(cmd)
+		By("uninstalling Milo's notification CRDs")
+		if crds, err := utils.MiloNotificationCRDs(); err == nil {
+			cmd = exec.Command("kubectl", "delete", "--ignore-not-found", "-k", crds)
+			_, _ = utils.Run(cmd)
+		}
 
 		By("removing manager namespace")
 		cmd = exec.Command("kubectl", "delete", "ns", namespace)

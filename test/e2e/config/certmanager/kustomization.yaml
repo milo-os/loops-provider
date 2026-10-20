@@ -1,0 +1,9 @@
+# kubebuilder v4.8.0's config/certmanager, the version this project was scaffolded with, for the end-to-end suite only.
+namespace: email-provider-loops-system
+resources:
+- issuer.yaml
+- certificate-webhook.yaml
+- certificate-metrics.yaml
+
+configurations:
+- kustomizeconfig.yaml

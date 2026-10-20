@@ -1,0 +1,9 @@
+# The end-to-end suite deploys config/default with the certificates its manager reads, issued by the cert-manager the
+# suite installs. Production's deployment supplies them instead. The release bundle is config/, so nothing here ships.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- ../../../config/default
+- certmanager
+patches:
+- path: manager_certs_patch.yaml

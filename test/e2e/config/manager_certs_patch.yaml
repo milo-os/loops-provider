@@ -1,0 +1,30 @@
+# Mounts the webhook and metrics server certificates at kubebuilder's paths and points the manager at them.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: email-provider-loops-controller-manager
+  namespace: email-provider-loops-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: controller-manager
+        env:
+        - name: WEBHOOK_CERT_PATH
+          value: /tmp/k8s-webhook-server/serving-certs
+        - name: METRICS_CERT_PATH
+          value: /tmp/k8s-metrics-server/metrics-certs
+        volumeMounts:
+        - name: webhook-certs
+          mountPath: /tmp/k8s-webhook-server/serving-certs
+          readOnly: true
+        - name: metrics-certs
+          mountPath: /tmp/k8s-metrics-server/metrics-certs
+          readOnly: true
+      volumes:
+      - name: webhook-certs
+        secret:
+          secretName: webhook-server-cert
+      - name: metrics-certs
+        secret:
+          secretName: metrics-server-cert
