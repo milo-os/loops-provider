@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
+	loops "go.miloapis.com/email-provider-loops/pkg/loops"
 	notificationv1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -113,5 +115,48 @@ func TestLoopsContactGroupMembershipFinalizer_NoMailingListConfigured(t *testing
 	}
 	if res != (finalizerpkg.Result{}) {
 		t.Fatalf("Finalize() expected empty result, got %+v", res)
+	}
+}
+
+// removalFailingLoops is a loops.API whose RemoveFromMailingList answers with err.
+type removalFailingLoops struct {
+	recordingLoops
+	err error
+}
+
+func (l *removalFailingLoops) RemoveFromMailingList(context.Context, string, string) (*loops.APIResponse, error) {
+	return nil, l.err
+}
+
+// finalizeWithRemovalError runs the membership finalizer against a group that names a Loops mailing list, with
+// Loops answering the removal with a 400 that carries body. The membership is in the client, with its status
+// subresource, because a failed finalizer writes its reason there.
+func finalizeWithRemovalError(t *testing.T, body string) (finalizerpkg.Result, error) {
+	t.Helper()
+	objs := membershipFixtures([]notificationv1.ContactGroupProviderSpec{{Name: "Loops", ID: "list-1"}}, nil)
+	api := &removalFailingLoops{err: &loops.Error{StatusCode: http.StatusBadRequest, Body: body}}
+	_, c := newMembershipController(t, api, objs...)
+	f := &loopsContactGroupMembershipFinalizer{Client: c, Loops: api}
+	return f.Finalize(context.Background(), objs[2])
+}
+
+func TestLoopsContactGroupMembershipFinalizer_MailingListRejectedByLoops(t *testing.T) {
+	// The group names a mailing list that Loops does not know, so Loops answers the removal with 400 "Invalid
+	// mailing lists". No Loops-side membership can exist in a list Loops does not have, so the finalizer must
+	// complete rather than retry forever.
+	res, err := finalizeWithRemovalError(t, `{"success":false,"message":"Invalid mailing lists: list-1"}`)
+	if err != nil {
+		t.Fatalf("Finalize() returned error when Loops rejects the mailing list: %v", err)
+	}
+	if res != (finalizerpkg.Result{}) {
+		t.Fatalf("Finalize() expected empty result, got %+v", res)
+	}
+}
+
+func TestLoopsContactGroupMembershipFinalizer_OtherBadRequestFails(t *testing.T) {
+	// Any other 400 is a failure the finalizer cannot judge, so it must still fail and be retried.
+	_, err := finalizeWithRemovalError(t, `{"success":false,"message":"Invalid email"}`)
+	if !loops.IsBadRequest(err) {
+		t.Fatalf("Finalize() should fail with Loops' 400 on a 400 that does not reject the mailing list, got: %v", err)
 	}
 }

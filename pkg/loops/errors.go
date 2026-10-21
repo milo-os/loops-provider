@@ -1,10 +1,16 @@
 package loops
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 )
+
+// invalidMailingListsMessage starts the message of Loops' 400 for a request that names a mailing list Loops does
+// not have: "Invalid mailing lists: <id>".
+const invalidMailingListsMessage = "Invalid mailing lists"
 
 // Error represents an error returned by the Loops API.
 type Error struct {
@@ -33,6 +39,22 @@ func IsBadRequest(err error) bool {
 // IsNotFound checks if the error represents a 404 Not Found response.
 func IsNotFound(err error) bool {
 	return isErrorStatus(err, http.StatusNotFound)
+}
+
+// IsInvalidMailingList checks if the error is Loops' 400 for a mailing list it does not have.
+// Any other 400, such as an invalid email address, returns false.
+func IsInvalidMailingList(err error) bool {
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	var body struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal([]byte(apiErr.Body), &body) != nil {
+		return false
+	}
+	return strings.HasPrefix(body.Message, invalidMailingListsMessage)
 }
 
 // IsConflict checks if the error represents a 409 Conflict response.
