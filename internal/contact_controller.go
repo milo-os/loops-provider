@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/finalizer"
@@ -281,14 +280,14 @@ func (r *LoopsContactController) upsertContact(ctx context.Context, contact *not
 	log := logf.FromContext(ctx).WithValues("controller", "LoopsContactController", "trigger", contact.Name)
 	log.Info("Creating Loops contact")
 
-	// Create Loops contact
+	// Upsert the Loops contact. Subscribed is left out: Loops subscribes a new contact by default, and on an existing
+	// contact the field re-subscribes a person who unsubscribed in Loops.
 	_, err := r.Loops.UpsertContact(ctx, loops.ContactRequest{
-		Email:      contact.Spec.Email,
-		UserID:     string(contact.UID),
-		FirstName:  contact.Spec.GivenName,
-		LastName:   contact.Spec.FamilyName,
-		Source:     "email-provider-loops-k8s-controller",
-		Subscribed: ptr.To(true),
+		Email:     contact.Spec.Email,
+		UserID:    string(contact.UID),
+		FirstName: contact.Spec.GivenName,
+		LastName:  contact.Spec.FamilyName,
+		Source:    "email-provider-loops-k8s-controller",
 	})
 	if err != nil {
 		log.Error(err, "Failed to find Loops contact")
