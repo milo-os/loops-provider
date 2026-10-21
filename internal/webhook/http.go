@@ -16,8 +16,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"go.miloapis.com/email-provider-loops/pkg/loops"
-	notificationmiloapiscomv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type Webhook struct {
@@ -128,71 +126,6 @@ func verifyWebhook(r *http.Request, body []byte, secret string) error {
 			Message: "Invalid signature",
 			Err:     ErrInvalidSignature,
 		}
-	}
-
-	return nil
-}
-
-const (
-	contactStatusProviderIDIndexKey = "contact-status-providerID"
-	groupProviderIDIndexKey         = "group-providerID"
-	groupMembershipRemovalIndexKey  = "group-membership-removal"
-)
-
-func buildGroupMembershipRemovalIndexKey(contactRef *notificationmiloapiscomv1alpha1.ContactReference, groupRef *notificationmiloapiscomv1alpha1.ContactGroupReference) string {
-	return fmt.Sprintf("%s-%s-%s-%s", contactRef.Name, contactRef.Namespace, groupRef.Name, groupRef.Namespace)
-}
-
-// setupIndexes sets up the required field indexes for webhook operations
-func setupIndexes(mgr ctrl.Manager) error {
-	// Index Contact objects by .status.providerID so that the webhook handler can
-	// quickly look them up when processing incoming Loops webhook events.
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(),
-		&notificationmiloapiscomv1alpha1.Contact{},
-		contactStatusProviderIDIndexKey,
-		func(rawObj client.Object) []string {
-			contact := rawObj.(*notificationmiloapiscomv1alpha1.Contact)
-			if contact.UID == "" {
-				return nil
-			}
-			return []string{string(contact.UID)}
-		},
-	); err != nil {
-		return fmt.Errorf("failed to create contact index for providerID: %w", err)
-	}
-
-	// Index ContactGroup objects by .spec.providers.loops.providerID so that the webhook handler can
-	// quickly look them up when processing incoming Loops webhook events.
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(),
-		&notificationmiloapiscomv1alpha1.ContactGroup{},
-		groupProviderIDIndexKey,
-		func(rawObj client.Object) []string {
-			group := rawObj.(*notificationmiloapiscomv1alpha1.ContactGroup)
-			for _, provider := range group.Spec.Providers {
-				if provider.Name == "Loops" {
-					return []string{provider.ID}
-				}
-			}
-			return nil
-		},
-	); err != nil {
-		return fmt.Errorf("failed to create contact index for providerID: %w", err)
-	}
-
-	// Index ContactGroup objects by .spec.providers.loops.providerID so that the webhook handler can
-	// quickly look them up when processing incoming Loops webhook events.
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(),
-		&notificationmiloapiscomv1alpha1.ContactGroupMembershipRemoval{},
-		groupMembershipRemovalIndexKey,
-		func(rawObj client.Object) []string {
-			removal := rawObj.(*notificationmiloapiscomv1alpha1.ContactGroupMembershipRemoval)
-			return []string{buildGroupMembershipRemovalIndexKey(&removal.Spec.ContactRef, &removal.Spec.ContactGroupRef)}
-		},
-	); err != nil {
-		return fmt.Errorf("failed to create contact index for providerID: %w", err)
 	}
 
 	return nil
