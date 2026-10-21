@@ -36,6 +36,17 @@ const (
 	LoopsContactNotUpdatedReason = "ContactNotUpdated"
 	// LoopsContactNotFinalizedReason is a reason that is set when the Loops contact is not finalized
 	LoopsContactNotFinalizedReason = "ContactNotFinalized"
+	// LoopsContactMissingInLoopsReason is a reason that is set when Loops reports the contact deleted
+	LoopsContactMissingInLoopsReason = "ContactMissingInLoops"
+)
+
+const (
+	// LoopsSubscribedCondition is Loops' audience state of the contact, as Loops' last event reported it
+	LoopsSubscribedCondition = "LoopsSubscribed"
+	// LoopsUnsubscribedReason is a reason that is set when Loops reports the contact unsubscribed from the audience
+	LoopsUnsubscribedReason = "UnsubscribedInLoops"
+	// LoopsResubscribedReason is a reason that is set when Loops reports the contact resubscribed
+	LoopsResubscribedReason = "ResubscribedInLoops"
 )
 
 const (

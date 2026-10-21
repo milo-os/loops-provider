@@ -84,8 +84,9 @@ type delivery struct {
 	id       string
 	sentAt   time.Time
 	body     []byte
-	signedAs []byte // the body the signature covers; nil means body
-	secret   string // the secret Loops signs with; empty means testSecret
+	signedAs []byte          // the body the signature covers; nil means body
+	secret   string          // the secret Loops signs with; empty means testSecret
+	ctx      context.Context // the request's context; nil means a background one
 }
 
 func deliverOnce(wh *Webhook, e loopsEvent, id string) int {
@@ -101,6 +102,9 @@ func deliver(wh *Webhook, d delivery) int {
 		secret = testSecret
 	}
 	req := httptest.NewRequest(http.MethodPost, wh.Endpoint, bytes.NewReader(d.body))
+	if d.ctx != nil {
+		req = req.WithContext(d.ctx)
+	}
 	req.Header.Set("webhook-id", d.id)
 	req.Header.Set("webhook-timestamp", strconv.FormatInt(d.sentAt.Unix(), 10))
 	req.Header.Set("webhook-signature", sign(secret, d.id, d.sentAt, signed))
@@ -402,6 +406,12 @@ func TestReceiver_RecordsTheAudienceStateInOrder(t *testing.T) {
 		"an older unsubscribe": {
 			[]step{{"email.resubscribed", actAt}, {"contact.unsubscribed", actAt.Add(-time.Second)}},
 			metav1.ConditionTrue, "ResubscribedInLoops"},
+		"an unsubscribe in the same second as a resubscribe": {
+			[]step{{"email.resubscribed", actAt}, {"contact.unsubscribed", actAt}},
+			metav1.ConditionFalse, "UnsubscribedInLoops"},
+		"a resubscribe in the same second as an unsubscribe": {
+			[]step{{"contact.unsubscribed", actAt}, {"email.resubscribed", actAt}},
+			metav1.ConditionFalse, "UnsubscribedInLoops"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

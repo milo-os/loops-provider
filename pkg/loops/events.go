@@ -39,4 +39,11 @@ type MailingListUnsubscribedEvent struct {
 const (
 	EventNameMailingListSubscribed   = "contact.mailingList.subscribed"
 	EventNameMailingListUnsubscribed = "contact.mailingList.unsubscribed"
+	// EventNameContactDeleted is sent when a contact is deleted from the audience.
+	EventNameContactDeleted = "contact.deleted"
+	// EventNameContactUnsubscribed is sent when a contact leaves the audience, after a hard bounce, and beside
+	// contact.deleted.
+	EventNameContactUnsubscribed = "contact.unsubscribed"
+	// EventNameEmailResubscribed is sent when a recipient resubscribes from an email's preference center.
+	EventNameEmailResubscribed = "email.resubscribed"
 )

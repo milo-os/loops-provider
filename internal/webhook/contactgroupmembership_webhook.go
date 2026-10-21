@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"go.miloapis.com/email-provider-loops/internal/util"
+	"go.miloapis.com/email-provider-loops/pkg/loops"
 	notificationmiloapiscomv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,125 +13,178 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create
-// +kubebuilder:rbac:groups=notification.miloapis.com,resources=contacts,verbs=get;list
+// +kubebuilder:rbac:groups=notification.miloapis.com,resources=contacts,verbs=get;list;watch
+// +kubebuilder:rbac:groups=notification.miloapis.com,resources=contacts/status,verbs=get;patch
+// +kubebuilder:rbac:groups=notification.miloapis.com,resources=contactgroups,verbs=get;list;watch
+// +kubebuilder:rbac:groups=notification.miloapis.com,resources=contactgroupmemberships,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=notification.miloapis.com,resources=contactgroupmembershipremovals,verbs=get;list;watch;create;delete
+
+// receiver applies Loops' events to Milo.
+type receiver struct {
+	client client.Client
+}
 
 func NewLoopsContactGroupMembershipWebhookV1(k8sClient client.Client, signingSecret string) *Webhook {
+	rc := &receiver{client: k8sClient}
 	return &Webhook{
-		Handler: HandlerFunc(func(ctx context.Context, req Request) Response {
-			log := logf.FromContext(ctx).WithName("loops-webhook-handler")
-
-			userUID := req.BaseEvent.ContactIdentity.UserID
-			if userUID == "" {
-				log.Info("ContactIdentity.UserID is empty, cannot find contact")
-				return BadRequestResponse()
-			}
-
-			contact, err := getContactByProviderID(ctx, k8sClient, userUID)
-			if err != nil {
-				log.Error(err, "Failed to get contact by user UID",
-					"userUID", userUID)
-				return InternalServerErrorResponse()
-			}
-			if contact == nil {
-				log.Info("Contact not found for user UID",
-					"userID", userUID)
-				return BadRequestResponse()
-			}
-			log.Info("Found contact for webhook event", "contactName", contact.Name, "contactNamespace", contact.Namespace, "contactUID", contact.UID)
-
-			var groupID string
-			if req.MailingListSubscribedEvent != nil {
-				groupID = req.MailingListSubscribedEvent.MailingList.ID
-			}
-			if req.MailingListUnsubscribedEvent != nil {
-				groupID = req.MailingListUnsubscribedEvent.MailingList.ID
-			}
-			if groupID == "" {
-				log.Info("MailingList.ID is empty, cannot find contact group")
-				return BadRequestResponse()
-			}
-
-			group, err := getContactGroupByProviderID(ctx, k8sClient, groupID)
-			if err != nil {
-				log.Error(err, "Failed to get contact group by group ID",
-					"groupID", groupID)
-				return InternalServerErrorResponse()
-			}
-			if group == nil {
-				log.Info("Contact group not found for group ID",
-					"groupID", groupID)
-				return BadRequestResponse()
-			}
-			log.Info("Found contact group for webhook event", "groupID", groupID, "groupName", group.Name, "groupNamespace", group.Namespace, "groupUID", group.UID)
-
-			// Handle mailing list subscribed event
-			if req.MailingListSubscribedEvent != nil {
-				log.Info("Processing SUBSCRIBED event")
-
-				// Get assoaciate contact group memebership removal
-				removal, err := getContactGroupMembershipRemoval(ctx, k8sClient, contact, group)
-				if err != nil && !apierrors.IsNotFound(err) {
-					log.Error(err, "Failed to get contact group membership removal", "contactName", contact.Name, "contactNamespace", contact.Namespace, "groupID", groupID)
-					return InternalServerErrorResponse()
-				}
-
-				// If there is a removal, we need to delete it
-				if removal != nil {
-					log.Info("Contact group membership removal found, deleting", "contactName", removal.Spec.ContactRef.Name, "contactNamespace", removal.Spec.ContactRef.Namespace)
-					err := deleteContactGroupMembershipRemoval(ctx, k8sClient, removal)
-					if err != nil {
-						log.Error(err, "Failed to delete contact group membership removal", "contactName", removal.Spec.ContactRef.Name, "contactNamespace", removal.Spec.ContactRef.Namespace)
-						return InternalServerErrorResponse()
-					}
-				} else {
-					log.Info("Contact group membership removal not found, continuing")
-				}
-
-				// Create the corresponding contact group membership
-				err = createContactGroupMembership(ctx, k8sClient, contact, group)
-				if err != nil && !apierrors.IsAlreadyExists(err) {
-					log.Error(err, "Failed to create contact group membership")
-					return InternalServerErrorResponse()
-				}
-
-				return OkResponse()
-			}
-
-			// Handle mailing list unsubscribed event
-			if req.MailingListUnsubscribedEvent != nil {
-				log.Info("Processing UNSUBSCRIBED event")
-
-				// Get assoaciate contact group memebership removal
-				removal, err := getContactGroupMembershipRemoval(ctx, k8sClient, contact, group)
-				if err != nil && !apierrors.IsNotFound(err) {
-					log.Error(err, "Failed to get contact group membership removal", "contactName", contact.Name, "contactNamespace", contact.Namespace, "groupID", groupID)
-					return InternalServerErrorResponse()
-				}
-
-				if removal != nil {
-					log.Info("Contact group membership removal found, skiping creation", "contactName", removal.Spec.ContactRef.Name, "contactNamespace", removal.Spec.ContactRef.Namespace)
-					return OkResponse()
-				} else {
-					err := createContactGroupMembershipRemoval(ctx, k8sClient, contact, group)
-					if err != nil {
-						log.Error(err, "Failed to create contact group membership removal", "contactName", contact.Name, "contactNamespace", contact.Namespace, "groupID", groupID)
-						return InternalServerErrorResponse()
-					}
-				}
-
-				return OkResponse()
-			}
-
-			log.Info("No recognized event in request")
-			return BadRequestResponse()
-		}),
+		Handler:       HandlerFunc(rc.handle),
 		Endpoint:      "/apis/emailnotification.k8s.io/v1/loops/contactgroupmemberships",
 		signingSecret: signingSecret,
+		budget:        handlerBudget,
+		seen:          newSeenDeliveries(),
 	}
 }
 
-// getContactByProviderID retrieves a Contact by its status.providerID field using the indexed field
+// handle acts on one event that ServeHTTP has verified and parsed.
+func (rc *receiver) handle(ctx context.Context, req Request) Response {
+	contact, miss := rc.contactOf(ctx, req.BaseEvent.ContactIdentity.UserID)
+	if contact == nil {
+		return miss
+	}
+	switch req.BaseEvent.EventName {
+	case loops.EventNameContactDeleted:
+		return rc.contactDeleted(ctx, contact, req.BaseEvent.EventTime)
+	case loops.EventNameContactUnsubscribed:
+		return rc.recordAudienceState(ctx, contact, unsubscribed(req.BaseEvent.EventTime))
+	case loops.EventNameEmailResubscribed:
+		return rc.recordAudienceState(ctx, contact, resubscribed(req.BaseEvent.EventTime))
+	}
+
+	group, miss := rc.groupOf(ctx, mailingListID(req))
+	if group == nil {
+		return miss
+	}
+	if req.MailingListSubscribedEvent != nil {
+		return rc.listSubscribed(ctx, contact, group, req.BaseEvent.EventTime)
+	}
+	return rc.listUnsubscribed(ctx, contact, group)
+}
+
+func mailingListID(req Request) string {
+	if req.MailingListSubscribedEvent != nil {
+		return req.MailingListSubscribedEvent.MailingList.ID
+	}
+	if req.MailingListUnsubscribedEvent != nil {
+		return req.MailingListUnsubscribedEvent.MailingList.ID
+	}
+	return ""
+}
+
+// contactOf returns the Contact Loops names, or the answer when there is none to act on.
+func (rc *receiver) contactOf(ctx context.Context, userID string) (*notificationmiloapiscomv1alpha1.Contact, Response) {
+	if userID == "" {
+		return nil, handledResponse(outcomeNoUserID)
+	}
+	contact, err := getContactByProviderID(ctx, rc.client, userID)
+	if err != nil {
+		return nil, failed(ctx, err, "Failed to get contact by user UID")
+	}
+	if contact == nil {
+		return nil, handledResponse(outcomeUnknownContact)
+	}
+	return contact, Response{}
+}
+
+// groupOf returns the ContactGroup of a Loops mailing list, or the answer when there is none to act on.
+func (rc *receiver) groupOf(ctx context.Context, listID string) (*notificationmiloapiscomv1alpha1.ContactGroup, Response) {
+	if listID == "" {
+		return nil, handledResponse(outcomeNoListID)
+	}
+	group, err := getContactGroupByProviderID(ctx, rc.client, listID)
+	if err != nil {
+		return nil, failed(ctx, err, "Failed to get contact group by group ID")
+	}
+	if group == nil {
+		return nil, handledResponse(outcomeUnknownList)
+	}
+	return group, Response{}
+}
+
+// listSubscribed undoes the person's opt-out only when Loops saw the subscribe after it. Loops' eventTime and Milo's
+// creationTimestamp both have whole seconds, and a tie goes to the opt-out. A retry carries the event's first time, so
+// it never outranks a later opt-out.
+func (rc *receiver) listSubscribed(
+	ctx context.Context,
+	contact *notificationmiloapiscomv1alpha1.Contact,
+	group *notificationmiloapiscomv1alpha1.ContactGroup,
+	eventTime int64,
+) Response {
+	removal, err := getContactGroupMembershipRemoval(ctx, rc.client, contact, group)
+	if err != nil {
+		return failed(ctx, err, "Failed to get contact group membership removal")
+	}
+	if removal != nil {
+		if eventTime <= removal.CreationTimestamp.Unix() {
+			return handledResponse(outcomeOlderThanOptOut)
+		}
+		if err := rc.client.Delete(ctx, removal); err != nil && !apierrors.IsNotFound(err) {
+			return failed(ctx, err, "Failed to delete contact group membership removal")
+		}
+	}
+	return rc.ensureMembership(ctx, contact, group)
+}
+
+// ensureMembership adds the person to the group. Our own add comes back from Loops as a subscribe, so a membership
+// that exists, or Milo's refusal of a second one, is the usual case and not a failure.
+func (rc *receiver) ensureMembership(
+	ctx context.Context,
+	contact *notificationmiloapiscomv1alpha1.Contact,
+	group *notificationmiloapiscomv1alpha1.ContactGroup,
+) Response {
+	membership, err := getContactGroupMembership(ctx, rc.client, contact, group)
+	if err != nil {
+		return failed(ctx, err, "Failed to get contact group membership")
+	}
+	if membership != nil {
+		return handledResponse(outcomeMemberExists)
+	}
+	if err := createContactGroupMembership(ctx, rc.client, contact, group); err != nil {
+		if _, duplicate := util.DuplicateRefusal(err); duplicate || apierrors.IsAlreadyExists(err) {
+			return handledResponse(outcomeMemberExists)
+		}
+		return failed(ctx, err, "Failed to create contact group membership")
+	}
+	return OkResponse()
+}
+
+// listUnsubscribed records the person's opt-out. A person's own unsubscribe always meets a live membership; without
+// one, or with one Milo is deleting, the event is the echo of our own removal from the list.
+func (rc *receiver) listUnsubscribed(
+	ctx context.Context,
+	contact *notificationmiloapiscomv1alpha1.Contact,
+	group *notificationmiloapiscomv1alpha1.ContactGroup,
+) Response {
+	membership, err := getContactGroupMembership(ctx, rc.client, contact, group)
+	if err != nil {
+		return failed(ctx, err, "Failed to get contact group membership")
+	}
+	if membership == nil || !membership.DeletionTimestamp.IsZero() {
+		return handledResponse(outcomeEcho)
+	}
+
+	removal, err := getContactGroupMembershipRemoval(ctx, rc.client, contact, group)
+	if err != nil {
+		return failed(ctx, err, "Failed to get contact group membership removal")
+	}
+	if removal != nil {
+		return handledResponse(outcomeAlreadyRemoved)
+	}
+	if err := createContactGroupMembershipRemoval(ctx, rc.client, contact, group); err != nil {
+		if _, duplicate := util.DuplicateRefusal(err); duplicate {
+			return handledResponse(outcomeAlreadyRemoved)
+		}
+		return failed(ctx, err, "Failed to create contact group membership removal")
+	}
+	return OkResponse()
+}
+
+// failed logs a Milo call that failed and answers 5xx, so Loops retries the event.
+func failed(ctx context.Context, err error, msg string) Response {
+	logf.FromContext(ctx).Error(err, msg)
+	return InternalServerErrorResponse()
+}
+
+// getContactByProviderID retrieves a Contact by the userId Loops carries, which is the Contact's UID
 func getContactByProviderID(ctx context.Context, k8sClient client.Client, providerID string) (*notificationmiloapiscomv1alpha1.Contact, error) {
 	log := logf.FromContext(ctx)
 
@@ -187,14 +242,8 @@ func createContactGroupMembership(ctx context.Context, k8sClient client.Client, 
 			Namespace:    group.Namespace,
 		},
 		Spec: notificationmiloapiscomv1alpha1.ContactGroupMembershipSpec{
-			ContactRef: notificationmiloapiscomv1alpha1.ContactReference{
-				Name:      contact.Name,
-				Namespace: contact.Namespace,
-			},
-			ContactGroupRef: notificationmiloapiscomv1alpha1.ContactGroupReference{
-				Name:      group.Name,
-				Namespace: group.Namespace,
-			},
+			ContactRef:      contactRefOf(contact),
+			ContactGroupRef: groupRefOf(group),
 		},
 	}
 
@@ -206,19 +255,27 @@ func createContactGroupMembership(ctx context.Context, k8sClient client.Client, 
 	return nil
 }
 
+// getContactGroupMembership retrieves the ContactGroupMembership of a contact and a group, live or being deleted
+func getContactGroupMembership(ctx context.Context, k8sClient client.Client, contact *notificationmiloapiscomv1alpha1.Contact, group *notificationmiloapiscomv1alpha1.ContactGroup) (*notificationmiloapiscomv1alpha1.ContactGroupMembership, error) {
+	var membershipList notificationmiloapiscomv1alpha1.ContactGroupMembershipList
+	if err := k8sClient.List(ctx, &membershipList,
+		client.MatchingFields{groupMembershipIndexKey: contactGroupKey(contactRefOf(contact), groupRefOf(group))},
+	); err != nil {
+		return nil, err
+	}
+	if len(membershipList.Items) == 0 {
+		return nil, nil
+	}
+	return &membershipList.Items[0], nil
+}
+
 // GetContactGroupMembershipRemoval retrieves a ContactGroupMembershipRemoval by its spec.contactRef and spec.contactGroupRef using the indexed field
 func getContactGroupMembershipRemoval(ctx context.Context, k8sClient client.Client, contact *notificationmiloapiscomv1alpha1.Contact, group *notificationmiloapiscomv1alpha1.ContactGroup) (*notificationmiloapiscomv1alpha1.ContactGroupMembershipRemoval, error) {
 	log := logf.FromContext(ctx)
 
 	var removalList notificationmiloapiscomv1alpha1.ContactGroupMembershipRemovalList
 	if err := k8sClient.List(ctx, &removalList,
-		client.MatchingFields{groupMembershipRemovalIndexKey: buildGroupMembershipRemovalIndexKey(&notificationmiloapiscomv1alpha1.ContactReference{
-			Name:      contact.Name,
-			Namespace: contact.Namespace,
-		}, &notificationmiloapiscomv1alpha1.ContactGroupReference{
-			Name:      group.Name,
-			Namespace: group.Namespace,
-		})},
+		client.MatchingFields{groupMembershipRemovalIndexKey: contactGroupKey(contactRefOf(contact), groupRefOf(group))},
 	); err != nil {
 		return nil, err
 	}
@@ -234,18 +291,6 @@ func getContactGroupMembershipRemoval(ctx context.Context, k8sClient client.Clie
 	return &removalList.Items[0], nil
 }
 
-// DeleteContactGroupMembershipRemoval deletes a ContactGroupMembershipRemoval by its name and namespace
-func deleteContactGroupMembershipRemoval(ctx context.Context, k8sClient client.Client, removal *notificationmiloapiscomv1alpha1.ContactGroupMembershipRemoval) error {
-	log := logf.FromContext(ctx)
-
-	if err := k8sClient.Delete(ctx, removal); err != nil {
-		return err
-	}
-
-	log.Info("Deleted contact group membership removal", "removalName", removal.Name, "removalNamespace", removal.Namespace)
-	return nil
-}
-
 // CreateContactGroupMembershipRemoval creates a ContactGroupMembershipRemoval in Kubernetes
 func createContactGroupMembershipRemoval(ctx context.Context, k8sClient client.Client, contact *notificationmiloapiscomv1alpha1.Contact, group *notificationmiloapiscomv1alpha1.ContactGroup) error {
 	log := logf.FromContext(ctx)
@@ -256,14 +301,8 @@ func createContactGroupMembershipRemoval(ctx context.Context, k8sClient client.C
 			Namespace:    group.Namespace,
 		},
 		Spec: notificationmiloapiscomv1alpha1.ContactGroupMembershipRemovalSpec{
-			ContactRef: notificationmiloapiscomv1alpha1.ContactReference{
-				Name:      contact.Name,
-				Namespace: contact.Namespace,
-			},
-			ContactGroupRef: notificationmiloapiscomv1alpha1.ContactGroupReference{
-				Name:      group.Name,
-				Namespace: group.Namespace,
-			},
+			ContactRef:      contactRefOf(contact),
+			ContactGroupRef: groupRefOf(group),
 		},
 	}
 
@@ -273,4 +312,12 @@ func createContactGroupMembershipRemoval(ctx context.Context, k8sClient client.C
 
 	log.Info("Created contact group membership removal", "removalName", removal.Name, "removalNamespace", removal.Namespace)
 	return nil
+}
+
+func contactRefOf(contact *notificationmiloapiscomv1alpha1.Contact) notificationmiloapiscomv1alpha1.ContactReference {
+	return notificationmiloapiscomv1alpha1.ContactReference{Name: contact.Name, Namespace: contact.Namespace}
+}
+
+func groupRefOf(group *notificationmiloapiscomv1alpha1.ContactGroup) notificationmiloapiscomv1alpha1.ContactGroupReference {
+	return notificationmiloapiscomv1alpha1.ContactGroupReference{Name: group.Name, Namespace: group.Namespace}
 }
