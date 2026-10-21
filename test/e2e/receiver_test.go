@@ -38,7 +38,8 @@ const (
 	e2eListID            = "e2e-list"
 )
 
-// receiverFixtures is a Contact, a group served by a Loops list, and the Contact's membership of it.
+// receiverFixtures is a Contact, a public and a private group each served by a Loops list, and the Contact's
+// membership of each.
 const receiverFixtures = `
 apiVersion: notification.miloapis.com/v1alpha1
 kind: Contact
@@ -73,6 +74,31 @@ spec:
     namespace: default
   contactGroupRef:
     name: e2e-newsletter
+    namespace: default
+---
+apiVersion: notification.miloapis.com/v1alpha1
+kind: ContactGroup
+metadata:
+  name: e2e-all-users
+  namespace: default
+spec:
+  displayName: E2E All Users
+  visibility: private
+  providers:
+  - name: Loops
+    id: e2e-private-list
+---
+apiVersion: notification.miloapis.com/v1alpha1
+kind: ContactGroupMembership
+metadata:
+  name: e2e-alice-all-users
+  namespace: default
+spec:
+  contactRef:
+    name: e2e-alice
+    namespace: default
+  contactGroupRef:
+    name: e2e-all-users
     namespace: default
 `
 
@@ -132,7 +158,7 @@ func receiverSpecs() {
 			Expect(post(listEvent("contact.mailingList.subscribed", userID, time.Now().Add(2*time.Second)))).
 				To(Equal(http.StatusOK))
 			Expect(removals()).To(Equal(0))
-			Expect(memberships()).To(Equal(1))
+			Expect(memberships()).To(Equal(2))
 		})
 
 		It("answers 2xx to what it cannot act on, and changes nothing", func() {
@@ -141,9 +167,11 @@ func receiverSpecs() {
 			Expect(removals()).To(Equal(0))
 		})
 
-		It("records an audience-wide unsubscribe on the Contact", func() {
+		It("takes an audience-wide unsubscribe out of the public group only, and records it on the Contact", func() {
 			Expect(post(contactEvent("contact.unsubscribed", userID, time.Now()))).To(Equal(http.StatusOK))
 			Expect(contactCondition("LoopsSubscribed")).To(Equal("False UnsubscribedInLoops"))
+			Expect(removalGroups()).To(Equal("e2e-newsletter"))
+			Expect(memberships()).To(Equal(2))
 		})
 
 		It("records a contact deleted in Loops on the Contact", func() {
@@ -193,7 +221,13 @@ func count(resource string) int {
 	return len(strings.Fields(out))
 }
 
-func removals() int    { return count("contactgroupmembershipremovals.notification.miloapis.com") }
+func removals() int { return count("contactgroupmembershipremovals.notification.miloapis.com") }
+
+// removalGroups returns the groups the Removals in default name, space-separated.
+func removalGroups() string {
+	return kubectl("get", "contactgroupmembershipremovals.notification.miloapis.com", "-n", "default", "-o",
+		"jsonpath={.items[*].spec.contactGroupRef.name}")
+}
 func memberships() int { return count("contactgroupmemberships.notification.miloapis.com") }
 
 // contactCondition returns "<status> <reason>" of one condition on the fixtures' Contact.
