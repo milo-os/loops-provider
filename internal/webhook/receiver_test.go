@@ -415,7 +415,7 @@ func TestReceiver_RecordsTheAudienceStateInOrder(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			wh, c := newReceiver(t, nil, alice(), newsletter(), aliceInNewsletter())
+			wh, c := newReceiver(t, nil, alice())
 			for i, s := range tc.steps {
 				if code := deliverOnce(wh, contactEvent(s.name, s.at), fmt.Sprintf("msg-%d", i)); code != http.StatusOK {
 					t.Fatalf("%s answered %d, want 200", s.name, code)
@@ -425,11 +425,80 @@ func TestReceiver_RecordsTheAudienceStateInOrder(t *testing.T) {
 			if cond == nil || cond.Status != tc.status || cond.Reason != tc.reason {
 				t.Fatalf("LoopsSubscribed = %+v, want %s %s", cond, tc.status, tc.reason)
 			}
-			if got := removals(t, c); len(got) != 0 {
-				t.Errorf("made %d Removals, want none: a Removal per group waits for a product decision", len(got))
+		})
+	}
+}
+
+// group returns a ContactGroup with `visibility`, served by the Loops list `listID` when it is not empty.
+func group(name string, visibility notificationv1.ContactGroupVisibility, listID string) *notificationv1.ContactGroup {
+	g := &notificationv1.ContactGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec:       notificationv1.ContactGroupSpec{DisplayName: name, Visibility: visibility},
+	}
+	if listID != "" {
+		g.Spec.Providers = []notificationv1.ContactGroupProviderSpec{{Name: "Loops", ID: listID}}
+	}
+	return g
+}
+
+func aliceIn(groupName string) *notificationv1.ContactGroupMembership {
+	m := aliceInNewsletter()
+	m.Name, m.Spec.ContactGroupRef.Name = "alice-"+groupName, groupName
+	return m
+}
+
+// Viktor's rule (2026-10-21): a global unsubscribe takes the person out of a public group whose Loops list carries
+// marketing, with a Removal; a private group keeps the membership, and only LoopsSubscribed records the state.
+func TestReceiver_AGlobalUnsubscribeLeavesOnlyThePublicLoopsGroups(t *testing.T) {
+	public := group("newsletter", notificationv1.ContactGroupVisibilityPublic, "list-1")
+	private := group("all-users", notificationv1.ContactGroupVisibilityPrivate, "list-2")
+	noLoops := group("investors", notificationv1.ContactGroupVisibilityPublic, "")
+	cases := map[string]struct {
+		objs []client.Object
+		want []string // the groups that get a Removal
+	}{
+		"a public Loops group":         {[]client.Object{alice(), public, aliceIn("newsletter")}, []string{"newsletter"}},
+		"a private Loops group":        {[]client.Object{alice(), private, aliceIn("all-users")}, nil},
+		"a public group without Loops": {[]client.Object{alice(), noLoops, aliceIn("investors")}, nil},
+		"a public and a private group": {[]client.Object{alice(), public, private, aliceIn("newsletter"),
+			aliceIn("all-users")}, []string{"newsletter"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			wh, c := newReceiver(t, nil, tc.objs...)
+			if code := deliverOnce(wh, contactEvent("contact.unsubscribed", actAt), "msg-1"); code != http.StatusOK {
+				t.Fatalf("answered %d, want 200", code)
+			}
+			if got := removedGroups(t, c); fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("Removals for %v, want %v", got, tc.want)
+			}
+			if cond := contactCondition(t, c, "LoopsSubscribed"); cond == nil || cond.Status != metav1.ConditionFalse {
+				t.Errorf("LoopsSubscribed = %+v, want False", cond)
 			}
 		})
 	}
+}
+
+// An unsubscribe older than the recorded resubscribe changes nothing, the Removals included.
+func TestReceiver_AnOutOfOrderGlobalUnsubscribeMakesNoRemoval(t *testing.T) {
+	wh, c := newReceiver(t, nil, alice(), newsletter(), aliceInNewsletter())
+	deliverOnce(wh, contactEvent("email.resubscribed", actAt), "msg-1")
+	if code := deliverOnce(wh, contactEvent("contact.unsubscribed", actAt.Add(-time.Second)), "msg-2"); code != http.StatusOK {
+		t.Fatalf("answered %d, want 200", code)
+	}
+	if got := removedGroups(t, c); len(got) != 0 {
+		t.Errorf("Removals for %v, want none", got)
+	}
+}
+
+func removedGroups(t *testing.T, c client.Client) []string {
+	t.Helper()
+	list := removals(t, c)
+	names := make([]string, 0, len(list))
+	for _, r := range list {
+		names = append(names, r.Spec.ContactGroupRef.Name)
+	}
+	return names
 }
 
 // M9: the unsubscribed message does not claim more than Loops says.
