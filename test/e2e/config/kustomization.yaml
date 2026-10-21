@@ -7,3 +7,4 @@ resources:
 - certmanager
 patches:
 - path: manager_certs_patch.yaml
+- path: webhook_certs_patch.yaml

@@ -71,10 +71,11 @@ var _ = Describe("Manager", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
 		// The controller manager and the webhook read their Loops credentials from this Secret, which
-		// production provides. The suite never calls Loops, so placeholder values are enough.
+		// production provides. The suite never calls Loops, so the API key is a placeholder; the signing
+		// secret has Loops' format, because the receiver's specs sign the events they post with it.
 		By("creating the Loops keys the deployments read")
 		cmd = exec.Command("kubectl", "create", "secret", "generic", "loops-keys", "-n", namespace,
-			"--from-literal=LOOPS_API_KEY=e2e", "--from-literal=LOOPS_SIGNING_SECRET=e2e")
+			"--from-literal=LOOPS_API_KEY=e2e", "--from-literal=LOOPS_SIGNING_SECRET="+e2eSigningSecret)
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create the Loops keys")
 
@@ -283,6 +284,8 @@ var _ = Describe("Manager", Ordered, func() {
 		//    strings.ToLower(<Kind>),
 		// ))
 	})
+
+	receiverSpecs()
 })
 
 // serviceAccountToken returns a token for the specified service account in the given namespace.

@@ -1,0 +1,23 @@
+# The receiver serves HTTPS on its Service with the certificate the suite's cert-manager issues for that Service
+# (certmanager/certificate-webhook.yaml, whose names are the receiver's Service). Production mounts its own.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: email-provider-loops-webhook
+  namespace: email-provider-loops-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: webhook
+        env:
+        - name: CERT_DIR
+          value: /tmp/k8s-webhook-server/serving-certs
+        volumeMounts:
+        - name: webhook-certs
+          mountPath: /tmp/k8s-webhook-server/serving-certs
+          readOnly: true
+      volumes:
+      - name: webhook-certs
+        secret:
+          secretName: webhook-server-cert
