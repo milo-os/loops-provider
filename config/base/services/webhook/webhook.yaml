@@ -20,6 +20,8 @@ spec:
         app.kubernetes.io/name: webhook
         app.kubernetes.io/part-of: email-provider-loops
     spec:
+      # The account manager-role binds; the receiver's RBAC markers say what it reads and writes.
+      serviceAccountName: controller-manager
       securityContext:
         runAsNonRoot: true
         seccompProfile:
