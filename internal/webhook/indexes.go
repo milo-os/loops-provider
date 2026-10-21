@@ -14,6 +14,7 @@ const (
 	groupProviderIDIndexKey         = "group-providerID"
 	groupMembershipRemovalIndexKey  = "group-membership-removal"
 	groupMembershipIndexKey         = "group-membership"
+	contactMembershipIndexKey       = "contact-membership"
 )
 
 // fieldIndex is a cache index the handler looks objects up by.
@@ -31,6 +32,7 @@ var fieldIndexes = []fieldIndex{
 	{&notificationmiloapiscomv1alpha1.ContactGroup{}, groupProviderIDIndexKey, groupLoopsListID},
 	{&notificationmiloapiscomv1alpha1.ContactGroupMembershipRemoval{}, groupMembershipRemovalIndexKey, removalTuple},
 	{&notificationmiloapiscomv1alpha1.ContactGroupMembership{}, groupMembershipIndexKey, membershipTuple},
+	{&notificationmiloapiscomv1alpha1.ContactGroupMembership{}, contactMembershipIndexKey, membershipContact},
 }
 
 func contactUID(rawObj client.Object) []string {
@@ -59,6 +61,11 @@ func removalTuple(rawObj client.Object) []string {
 func membershipTuple(rawObj client.Object) []string {
 	membership := rawObj.(*notificationmiloapiscomv1alpha1.ContactGroupMembership)
 	return []string{contactGroupKey(membership.Spec.ContactRef, membership.Spec.ContactGroupRef)}
+}
+
+func membershipContact(rawObj client.Object) []string {
+	ref := rawObj.(*notificationmiloapiscomv1alpha1.ContactGroupMembership).Spec.ContactRef
+	return []string{ref.Namespace + "/" + ref.Name}
 }
 
 func contactGroupKey(

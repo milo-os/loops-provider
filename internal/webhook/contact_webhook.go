@@ -3,6 +3,7 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	controller "go.miloapis.com/email-provider-loops/internal"
@@ -11,6 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // contactDeleted marks the Contact missing in Loops. The observed generation is the Contact's own, so the contact
@@ -103,4 +105,57 @@ func contactWriteFailed(ctx context.Context, err error) Response {
 // eventTimeOf is a Loops eventTime, a Unix time in seconds, as a condition time.
 func eventTimeOf(eventTime int64) metav1.Time {
 	return metav1.NewTime(time.Unix(eventTime, 0))
+}
+
+// contactUnsubscribed records that the person left the whole audience, then takes them out of each group whose Loops
+// list carries marketing. A private group keeps its membership; the condition records the state there.
+func (rc *receiver) contactUnsubscribed(ctx context.Context, contact *notificationmiloapiscomv1alpha1.Contact, eventTime int64) Response {
+	response := rc.recordAudienceState(ctx, contact, unsubscribed(eventTime))
+	if response.Outcome != outcomeApplied {
+		return response
+	}
+	return rc.leaveMarketingGroups(ctx, contact)
+}
+
+func (rc *receiver) leaveMarketingGroups(ctx context.Context, contact *notificationmiloapiscomv1alpha1.Contact) Response {
+	var memberships notificationmiloapiscomv1alpha1.ContactGroupMembershipList
+	if err := rc.client.List(ctx, &memberships,
+		client.MatchingFields{contactMembershipIndexKey: contact.Namespace + "/" + contact.Name}); err != nil {
+		return failed(ctx, err, "Failed to list the contact's memberships")
+	}
+	for i := range memberships.Items {
+		if response := rc.leaveIfMarketing(ctx, contact, &memberships.Items[i]); response.HttpStatus != http.StatusOK {
+			return response
+		}
+	}
+	return OkResponse()
+}
+
+func (rc *receiver) leaveIfMarketing(
+	ctx context.Context,
+	contact *notificationmiloapiscomv1alpha1.Contact,
+	membership *notificationmiloapiscomv1alpha1.ContactGroupMembership,
+) Response {
+	if !membership.DeletionTimestamp.IsZero() {
+		return OkResponse()
+	}
+	ref := membership.Spec.ContactGroupRef
+	group := &notificationmiloapiscomv1alpha1.ContactGroup{}
+	if err := rc.client.Get(ctx, client.ObjectKey{Namespace: ref.Namespace, Name: ref.Name}, group); err != nil {
+		if apierrors.IsNotFound(err) {
+			return OkResponse()
+		}
+		return failed(ctx, err, "Failed to get the membership's contact group")
+	}
+	if !carriesMarketing(group) {
+		return OkResponse()
+	}
+	return rc.removeFromGroup(ctx, contact, group)
+}
+
+// carriesMarketing reports whether a group's Loops list carries marketing: a public group that a Loops list serves.
+// A private group's membership is enforced, so a global unsubscribe leaves it in place.
+func carriesMarketing(group *notificationmiloapiscomv1alpha1.ContactGroup) bool {
+	return group.Spec.Visibility == notificationmiloapiscomv1alpha1.ContactGroupVisibilityPublic &&
+		len(groupLoopsListID(group)) > 0
 }

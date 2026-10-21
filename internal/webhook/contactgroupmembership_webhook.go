@@ -45,7 +45,7 @@ func (rc *receiver) handle(ctx context.Context, req Request) Response {
 	case loops.EventNameContactDeleted:
 		return rc.contactDeleted(ctx, contact, req.BaseEvent.EventTime)
 	case loops.EventNameContactUnsubscribed:
-		return rc.recordAudienceState(ctx, contact, unsubscribed(req.BaseEvent.EventTime))
+		return rc.contactUnsubscribed(ctx, contact, req.BaseEvent.EventTime)
 	case loops.EventNameEmailResubscribed:
 		return rc.recordAudienceState(ctx, contact, resubscribed(req.BaseEvent.EventTime))
 	}
@@ -161,7 +161,16 @@ func (rc *receiver) listUnsubscribed(
 	if membership == nil || !membership.DeletionTimestamp.IsZero() {
 		return handledResponse(outcomeEcho)
 	}
+	return rc.removeFromGroup(ctx, contact, group)
+}
 
+// removeFromGroup records that the person left the group, with a Removal; one that exists, or Milo's refusal of a
+// second, is done.
+func (rc *receiver) removeFromGroup(
+	ctx context.Context,
+	contact *notificationmiloapiscomv1alpha1.Contact,
+	group *notificationmiloapiscomv1alpha1.ContactGroup,
+) Response {
 	removal, err := getContactGroupMembershipRemoval(ctx, rc.client, contact, group)
 	if err != nil {
 		return failed(ctx, err, "Failed to get contact group membership removal")
