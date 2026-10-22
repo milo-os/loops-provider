@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -32,4 +33,25 @@ func PatchStatusIfChanged(ctx context.Context, params StatusPatchParams) error {
 	}
 
 	return nil
+}
+
+// PatchStatusWithLock reads obj again, lets mutate change it, and patches its status under the optimistic lock, so a
+// condition another writer set after our read is never dropped. A conflict starts again from a fresh read. mutate
+// reports whether it changed anything; nothing is written when it did not.
+//
+// The backoff is client-go's DefaultBackoff, recommended "for a conflict where a client may be attempting to make an
+// unrelated modification to a resource under active management by one or more controllers"; it also gives a cached
+// read time to catch up with the write that conflicted.
+func PatchStatusWithLock(ctx context.Context, c client.Client, obj client.Object, mutate func() bool) error {
+	key := client.ObjectKeyFromObject(obj)
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		if err := c.Get(ctx, key, obj); err != nil {
+			return err
+		}
+		original := obj.DeepCopyObject().(client.Object)
+		if !mutate() {
+			return nil
+		}
+		return c.Status().Patch(ctx, obj, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{}))
+	})
 }

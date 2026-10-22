@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -28,9 +29,9 @@ func miloNotificationCRDs(t *testing.T) string {
 	return filepath.Join(strings.TrimSpace(string(out)), "config", "crd", "bases", "notification")
 }
 
-// startMembershipManager runs the membership controller in a manager against a fresh API server, and returns a
-// client of that server.
-func startMembershipManager(t *testing.T, api *recordingLoops) client.Client {
+// startAPIServer starts a fresh API server that serves Milo's notification CRDs, and returns its config and a scheme
+// that knows them.
+func startAPIServer(t *testing.T) (*rest.Config, *runtime.Scheme) {
 	t.Helper()
 	env := &envtest.Environment{CRDDirectoryPaths: []string{miloNotificationCRDs(t)}, ErrorIfCRDPathMissing: true}
 	cfg, err := env.Start()
@@ -42,6 +43,14 @@ func startMembershipManager(t *testing.T, api *recordingLoops) client.Client {
 	sch := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(sch)
 	_ = notificationv1.AddToScheme(sch)
+	return cfg, sch
+}
+
+// startMembershipManager runs the membership controller in a manager against a fresh API server, and returns a
+// client of that server.
+func startMembershipManager(t *testing.T, api *recordingLoops) client.Client {
+	t.Helper()
+	cfg, sch := startAPIServer(t)
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: sch, Metrics: metricsserver.Options{BindAddress: "0"}})
 	if err != nil {
 		t.Fatalf("create the manager: %v", err)

@@ -7,8 +7,10 @@ rules:
 - apiGroups:
   - notification.miloapis.com
   resources:
+  - contactgroupmembershipremovals
   - contactgroupmemberships
   verbs:
+  - create
   - delete
   - get
   - list
@@ -32,6 +34,7 @@ rules:
 - apiGroups:
   - notification.miloapis.com
   resources:
+  - contactgroups
   - contacts
   verbs:
   - get

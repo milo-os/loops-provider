@@ -36,6 +36,17 @@ const (
 	LoopsContactNotUpdatedReason = "ContactNotUpdated"
 	// LoopsContactNotFinalizedReason is a reason that is set when the Loops contact is not finalized
 	LoopsContactNotFinalizedReason = "ContactNotFinalized"
+	// LoopsContactMissingInLoopsReason is a reason that is set when Loops reports the contact deleted
+	LoopsContactMissingInLoopsReason = "ContactMissingInLoops"
+)
+
+const (
+	// LoopsSubscribedCondition is Loops' audience state of the contact, as Loops' last event reported it
+	LoopsSubscribedCondition = "LoopsSubscribed"
+	// LoopsUnsubscribedReason is a reason that is set when Loops reports the contact unsubscribed from the audience
+	LoopsUnsubscribedReason = "UnsubscribedInLoops"
+	// LoopsResubscribedReason is a reason that is set when Loops reports the contact resubscribed
+	LoopsResubscribedReason = "ResubscribedInLoops"
 )
 
 const (
@@ -352,7 +363,7 @@ func (r *LoopsContactController) addToNewsLetterList(ctx context.Context, contac
 			log.Info("ContactGroupMembership already exists")
 			return false
 		}
-		if reason, alreadyMember := duplicateMembershipReason(err); alreadyMember {
+		if reason, alreadyMember := util.DuplicateRefusal(err); alreadyMember {
 			// A user could already have access to the newsletter because of a
 			// previously created membership under a different name. This
 			// prevents the reconciler from endlessly retrying a create that
@@ -404,27 +415,4 @@ func (r *LoopsContactController) generateCgmName(
 	hashStr := fmt.Sprintf("%x", hash)
 
 	return fmt.Sprintf("%s-%s", contact.Name, hashStr)
-}
-
-// duplicateMembershipReason inspects an Invalid admission error from the
-// ContactGroupMembership webhook and reports whether it means the contact is
-// already a member of the group under a different ContactGroupMembership
-// name. This happens when a membership for the same ContactRef+ContactGroupRef
-// pair already exists (e.g. created by another controller), so the composite
-// uniqueness check in the webhook rejects our deterministically-named create
-// even though errors.IsAlreadyExists is false.
-func duplicateMembershipReason(err error) (string, bool) {
-	if !errors.IsInvalid(err) {
-		return "", false
-	}
-	statusErr, ok := err.(*errors.StatusError)
-	if !ok || statusErr.ErrStatus.Details == nil {
-		return "", false
-	}
-	for _, cause := range statusErr.ErrStatus.Details.Causes {
-		if cause.Type == metav1.CauseTypeFieldValueDuplicate {
-			return cause.Message, true
-		}
-	}
-	return "", false
 }
