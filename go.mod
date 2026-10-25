@@ -8,7 +8,7 @@ require (
 	github.com/onsi/gomega v1.39.0
 	github.com/prometheus/client_golang v1.24.0
 	github.com/spf13/cobra v1.10.2
-	go.miloapis.com/milo v0.36.10
+	go.miloapis.com/milo v0.36.9
 	k8s.io/apimachinery v0.37.1
 	k8s.io/client-go v0.37.1
 	sigs.k8s.io/controller-runtime v0.25.2
