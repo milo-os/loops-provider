@@ -313,3 +313,32 @@ func TestIsInvalidMailingList(t *testing.T) {
 		})
 	}
 }
+
+func TestIsContactNotFound(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"Loops' 400 for a contact it does not hold, as production logged it", &Error{StatusCode: http.StatusBadRequest,
+			Body: `{"success":false,"message":"Contact not found"}`}, true},
+		{"the same, wrapped", fmt.Errorf("add: %w", &Error{StatusCode: http.StatusBadRequest,
+			Body: `{"success":false,"message":"Contact not found"}`}), true},
+		{"another 400", &Error{StatusCode: http.StatusBadRequest,
+			Body: `{"success":false,"message":"Invalid email"}`}, false},
+		{"a 400 for a mailing list Loops does not have", &Error{StatusCode: http.StatusBadRequest,
+			Body: `{"success":false,"message":"Invalid mailing lists: list-1"}`}, false},
+		{"a 400 whose body is not JSON", &Error{StatusCode: http.StatusBadRequest, Body: "Contact not found"}, false},
+		{"the message on another status", &Error{StatusCode: http.StatusNotFound,
+			Body: `{"success":false,"message":"Contact not found"}`}, false},
+		{"not a Loops error", errors.New("Contact not found"), false},
+		{"no error", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsContactNotFound(tc.err); got != tc.want {
+				t.Errorf("IsContactNotFound(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}

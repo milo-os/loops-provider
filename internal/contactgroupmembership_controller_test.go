@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/finalizer"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // recordingLoops is a loops.API that records every mailing list addition and succeeds. A manager calls it from
@@ -168,6 +171,102 @@ func TestReconcile_LoopsGroupWithIDAddsTheContact(t *testing.T) {
 	}
 	if got := loopsReady(t, c); got == nil || got.Status != metav1.ConditionTrue {
 		t.Fatalf("Reconcile() did not mark the membership created: %+v", got)
+	}
+}
+
+// refusingLoops records every mailing list addition and answers it with err.
+type refusingLoops struct {
+	recordingLoops
+	err error
+}
+
+func (l *refusingLoops) AddToMailingList(ctx context.Context, userID, listID string) (*loops.APIResponse, error) {
+	_, _ = l.recordingLoops.AddToMailingList(ctx, userID, listID)
+	return nil, l.err
+}
+
+// Loops' answer, as production logged it, to adding a contact it does not hold to a mailing list.
+var contactNotFound = &loops.Error{StatusCode: http.StatusBadRequest, Body: `{"success":false,"message":"Contact not found"}`}
+
+// contactState is the Contact's Loops condition: its status and reason.
+type contactState struct {
+	status metav1.ConditionStatus
+	reason string
+}
+
+// loopsFixtures returns membershipFixtures for a group Loops serves, with the Contact's Loops condition set to state;
+// a nil state leaves the Contact as it is before it reaches Loops.
+func loopsFixtures(state *contactState) []client.Object {
+	objs := membershipFixtures([]notificationv1.ContactGroupProviderSpec{{Name: "Loops", ID: "list-1"}}, nil)
+	if state != nil {
+		objs[0].(*notificationv1.Contact).Status.Conditions = []metav1.Condition{{Type: LoopsContactReadyCondition,
+			Status: state.status, Reason: state.reason, LastTransitionTime: metav1.Now()}}
+	}
+	return objs
+}
+
+func TestReconcile_ContactLoopsDoesNotHoldIsReportedAndNotRetried(t *testing.T) {
+	for name, state := range map[string]contactState{
+		"a contact Milo marks created in Loops": {metav1.ConditionTrue, LoopsContactCreatedReason},
+		"a contact Milo marks updated in Loops": {metav1.ConditionTrue, LoopsContactUpdatedReason},
+		"a contact Loops reported deleted":      {metav1.ConditionFalse, LoopsContactMissingInLoopsReason},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := &refusingLoops{err: contactNotFound}
+			r, c := newMembershipController(t, api, loopsFixtures(&state)...)
+
+			err := reconcileMembership(t, r)
+			if !errors.Is(err, reconcile.TerminalError(nil)) {
+				t.Fatalf("Reconcile() returned %v, want a terminal error: the contact cannot be added until a person acts", err)
+			}
+			got := loopsReady(t, c)
+			if got == nil || got.Status != metav1.ConditionFalse || got.Reason != LoopsContactMissingInLoopsReason {
+				t.Fatalf("Reconcile() did not report the contact missing in Loops: %+v", got)
+			}
+			if err := reconcileMembership(t, r); err != nil {
+				t.Fatalf("Reconcile() #2 returned %v, so the membership would keep failing", err)
+			}
+			if added := api.snapshot(); len(added) != 1 {
+				t.Fatalf("Reconcile() asked Loops %d times, want once: it must not retry or re-create the contact", len(added))
+			}
+		})
+	}
+}
+
+func TestReconcile_ContactNotFoundIsRetriedOtherwise(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err     error
+		contact *contactState
+	}{
+		"a contact not in Loops yet":      {contactNotFound, nil},
+		"a contact Loops has not created": {contactNotFound, &contactState{metav1.ConditionFalse, LoopsContactNotCreatedReason}},
+		"another 400 for a contact Milo marks created": {
+			&loops.Error{StatusCode: http.StatusBadRequest, Body: `{"success":false,"message":"Invalid email"}`},
+			&contactState{metav1.ConditionTrue, LoopsContactCreatedReason}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := &refusingLoops{err: tc.err}
+			r, c := newMembershipController(t, api, loopsFixtures(tc.contact)...)
+			requireRetried(t, r, c, api)
+		})
+	}
+}
+
+// requireRetried reconciles twice and requires each failure to be retried: an error that is not terminal, the
+// not-created reason, and one call to Loops per reconcile.
+func requireRetried(t *testing.T, r *LoopsContactGroupMembershipController, c client.Client, api *refusingLoops) {
+	t.Helper()
+	for i := 1; i <= 2; i++ {
+		err := reconcileMembership(t, r)
+		if err == nil || errors.Is(err, reconcile.TerminalError(nil)) {
+			t.Fatalf("Reconcile() #%d returned %v, want an error that is retried", i, err)
+		}
+	}
+	if got := loopsReady(t, c); got == nil || got.Reason != LoopsContactGroupMembershipNotCreatedReason {
+		t.Fatalf("Reconcile() changed the reason for a failure it should retry: %+v", got)
+	}
+	if added := api.snapshot(); len(added) != 2 {
+		t.Fatalf("Reconcile() asked Loops %d times, want 2: one per retry", len(added))
 	}
 }
 

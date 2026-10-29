@@ -12,6 +12,9 @@ import (
 // not have: "Invalid mailing lists: <id>".
 const invalidMailingListsMessage = "Invalid mailing lists"
 
+// contactNotFoundMessage is the message of Loops' 400 for a contact it does not hold.
+const contactNotFoundMessage = "Contact not found"
+
 // Error represents an error returned by the Loops API.
 type Error struct {
 	StatusCode int
@@ -41,20 +44,33 @@ func IsNotFound(err error) bool {
 	return isErrorStatus(err, http.StatusNotFound)
 }
 
-// IsInvalidMailingList checks if the error is Loops' 400 for a mailing list it does not have.
-// Any other 400, such as an invalid email address, returns false.
-func IsInvalidMailingList(err error) bool {
+// badRequestMessage returns the message of Loops' 400, and false for any other error or a body that is not JSON.
+func badRequestMessage(err error) (string, bool) {
 	var apiErr *Error
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
-		return false
+		return "", false
 	}
 	var body struct {
 		Message string `json:"message"`
 	}
 	if json.Unmarshal([]byte(apiErr.Body), &body) != nil {
-		return false
+		return "", false
 	}
-	return strings.HasPrefix(body.Message, invalidMailingListsMessage)
+	return body.Message, true
+}
+
+// IsInvalidMailingList checks if the error is Loops' 400 for a mailing list it does not have.
+// Any other 400, such as an invalid email address, returns false.
+func IsInvalidMailingList(err error) bool {
+	message, ok := badRequestMessage(err)
+	return ok && strings.HasPrefix(message, invalidMailingListsMessage)
+}
+
+// IsContactNotFound checks if the error is Loops' 400 for a contact it does not hold, as it answers an update that
+// names the contact by user ID alone. Any other 400 returns false.
+func IsContactNotFound(err error) bool {
+	message, ok := badRequestMessage(err)
+	return ok && message == contactNotFoundMessage
 }
 
 // IsConflict checks if the error represents a 409 Conflict response.
