@@ -314,8 +314,7 @@ func (r *LoopsContactGroupMembershipController) ensureOnMailingList(ctx context.
 
 	if err := r.addContactToMailingList(ctx, c, cg); err != nil {
 		log.Error(err, "Failed to add contact to mailing list")
-		setLoopsReady(cgm, metav1.ConditionFalse, LoopsContactGroupMembershipNotCreatedReason, fmt.Sprintf("Loops contact group membership not created on email provider: %s", err.Error()))
-		return err
+		return mailingListFailure(cgm, c, err)
 	}
 
 	log.Info("Loops contact group membership created")
@@ -327,6 +326,26 @@ func (r *LoopsContactGroupMembershipController) ensureOnMailingList(ctx context.
 		},
 	}
 	return nil
+}
+
+// mailingListFailure records a failed mailing list addition on the membership's Loops condition and returns the
+// error Reconcile reports. A contact that reached Loops and that Loops no longer holds stays missing until a person
+// acts: the provider never re-creates it, because the person may have removed themselves. So that failure is
+// terminal and is not retried. Any other failure is retried, a contact that has not reached Loops yet included.
+func mailingListFailure(cgm *notificationmiloapiscomv1alpha1.ContactGroupMembership, c *notificationmiloapiscomv1alpha1.Contact, err error) error {
+	if loops.IsContactNotFound(err) && reachedLoops(c) {
+		setLoopsReady(cgm, metav1.ConditionFalse, LoopsContactMissingInLoopsReason, "Loops holds no contact for this Contact, which reached Loops before. A person may have removed it, so the provider does not re-create it")
+		return reconcile.TerminalError(err)
+	}
+	setLoopsReady(cgm, metav1.ConditionFalse, LoopsContactGroupMembershipNotCreatedReason, fmt.Sprintf("Loops contact group membership not created on email provider: %s", err.Error()))
+	return err
+}
+
+// reachedLoops reports whether the Contact has been in Loops: Milo marks it created or updated there, or Loops
+// reported it deleted.
+func reachedLoops(c *notificationmiloapiscomv1alpha1.Contact) bool {
+	cond := meta.FindStatusCondition(c.Status.Conditions, LoopsContactReadyCondition)
+	return cond != nil && (cond.Status == metav1.ConditionTrue || cond.Reason == LoopsContactMissingInLoopsReason)
 }
 
 // setLoopsReady sets the membership's Loops condition.
