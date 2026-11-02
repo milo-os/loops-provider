@@ -36,6 +36,15 @@ linters:
           - dupl
           - lll
         path: internal/*
+      - linters:
+          - goconst
+        path: _test\.go
+      - linters:
+          - goconst
+        path: internal/contact(groupmembership)?_controller\.go
+      - linters:
+          - staticcheck
+        text: 'SA1019: \(sigs\.k8s\.io/controller-runtime\.Result\)\.Requeue is deprecated'
     paths:
       - third_party$
       - builtin$
