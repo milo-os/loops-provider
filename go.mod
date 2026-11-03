@@ -1,6 +1,6 @@
 module go.miloapis.com/email-provider-loops
 
-go 1.26.0
+go 1.27.0
 
 toolchain go1.27.3
 
