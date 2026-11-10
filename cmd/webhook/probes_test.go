@@ -77,22 +77,55 @@ func probeStatus(url string) (int, error) {
 	return resp.StatusCode, nil
 }
 
+type gatedWebhookServer struct {
+	ctrlwebhook.Server
+	release chan struct{}
+}
+
+func (g *gatedWebhookServer) Start(ctx context.Context) error {
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+		return nil
+	}
+	return g.Server.Start(ctx)
+}
+
+func waitForStatus(t *testing.T, url string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		code, err := probeStatus(url)
+		if err == nil && code == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s did not return %d: status %d, error %v", url, want, code, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func TestProbesReportWebhookServerStarted(t *testing.T) {
 	certDir := t.TempDir()
 	writeServingCert(t, certDir)
 	probePort := freePort(t)
+	release := make(chan struct{})
 
 	mgr, err := manager.New(&rest.Config{Host: "https://127.0.0.1:1"}, manager.Options{
 		Scheme:                 runtime.NewScheme(),
 		HealthProbeBindAddress: fmt.Sprintf("127.0.0.1:%d", probePort),
 		Metrics:                server.Options{BindAddress: "0"},
-		WebhookServer: ctrlwebhook.NewServer(ctrlwebhook.Options{
-			Host:     "127.0.0.1",
-			Port:     freePort(t),
-			CertDir:  certDir,
-			CertName: "tls.crt",
-			KeyName:  "tls.key",
-		}),
+		WebhookServer: &gatedWebhookServer{
+			Server: ctrlwebhook.NewServer(ctrlwebhook.Options{
+				Host:     "127.0.0.1",
+				Port:     freePort(t),
+				CertDir:  certDir,
+				CertName: "tls.crt",
+				KeyName:  "tls.key",
+			}),
+			release: release,
+		},
 	})
 	if err != nil {
 		t.Fatalf("creating manager: %v", err)
@@ -112,17 +145,17 @@ func TestProbesReportWebhookServerStarted(t *testing.T) {
 	}()
 
 	base := fmt.Sprintf("http://127.0.0.1:%d", probePort)
-	for _, path := range []string{"/healthz", "/readyz", "/readyz/webhook"} {
-		deadline := time.Now().Add(10 * time.Second)
-		for {
-			code, err := probeStatus(base + path)
-			if err == nil && code == http.StatusOK {
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("%s did not return 200: status %d, error %v", path, code, err)
-			}
-			time.Sleep(100 * time.Millisecond)
+	waitForStatus(t, base+"/healthz", http.StatusOK)
+	for _, path := range []string{"/readyz", "/readyz/webhook"} {
+		code, err := probeStatus(base + path)
+		if err != nil || code != http.StatusInternalServerError {
+			t.Fatalf("%s before the webhook server started: status %d, error %v, want %d",
+				path, code, err, http.StatusInternalServerError)
 		}
+	}
+
+	close(release)
+	for _, path := range []string{"/healthz", "/readyz", "/readyz/webhook"} {
+		waitForStatus(t, base+path, http.StatusOK)
 	}
 }
