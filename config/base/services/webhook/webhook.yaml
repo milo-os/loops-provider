@@ -37,6 +37,7 @@ spec:
             - --cert-file=$(CERT_FILE)
             - --key-file=$(KEY_FILE)
             - --metrics-bind-address=$(METRICS_BIND_ADDRESS)
+            - --health-probe-bind-address=$(HEALTH_PROBE_BIND_ADDRESS)
           env:
             - name: WEBHOOK_PORT
               value: "8090"
@@ -48,6 +49,8 @@ spec:
               value: tls.key
             - name: METRICS_BIND_ADDRESS
               value: ":8443"
+            - name: HEALTH_PROBE_BIND_ADDRESS
+              value: ":8081"
           envFrom:
             - secretRef:
                 name: loops-keys # MUST contain the LOOPS_SIGNING_SECRET
@@ -58,6 +61,21 @@ spec:
             - containerPort: 8090
               name: webhook
               protocol: TCP
+            - containerPort: 8081
+              name: health
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
