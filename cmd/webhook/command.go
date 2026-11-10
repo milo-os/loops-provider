@@ -8,6 +8,7 @@ import (
 	notificationmiloapiscomv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -24,6 +25,7 @@ func CreateWebhookCommand() *cobra.Command {
 		webhookPort                                     int
 		webhookCertDir, webhookCertFile, webhookKeyFile string
 		metricsBindAddress                              string
+		probeAddr                                       string
 	)
 
 	cmd := &cobra.Command{
@@ -42,6 +44,7 @@ func CreateWebhookCommand() *cobra.Command {
 
 			log.Info("Metrics bind address",
 				"metrics-bind-address", metricsBindAddress,
+				"health-probe-bind-address", probeAddr,
 			)
 
 			// Setup Kubernetes client config
@@ -57,7 +60,8 @@ func CreateWebhookCommand() *cobra.Command {
 
 			log.Info("Creating manager")
 			mgr, err := manager.New(restConfig, manager.Options{
-				Scheme: runtimeScheme,
+				Scheme:                 runtimeScheme,
+				HealthProbeBindAddress: probeAddr,
 				Metrics: server.Options{
 					BindAddress: metricsBindAddress,
 				},
@@ -70,6 +74,10 @@ func CreateWebhookCommand() *cobra.Command {
 			})
 			if err != nil {
 				return fmt.Errorf("failed to create manager: %w", err)
+			}
+
+			if err := addProbes(mgr); err != nil {
+				return err
 			}
 
 			log.Info("Loading signing secret")
@@ -100,5 +108,17 @@ func CreateWebhookCommand() *cobra.Command {
 	// Metrics flags.
 	cmd.Flags().StringVar(&metricsBindAddress, "metrics-bind-address", ":8080", "address the metrics endpoint binds to")
 
+	cmd.Flags().StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+
 	return cmd
+}
+
+func addProbes(mgr manager.Manager) error {
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		return fmt.Errorf("failed to set up health check: %w", err)
+	}
+	if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
+		return fmt.Errorf("failed to set up ready check: %w", err)
+	}
+	return nil
 }
