@@ -1,0 +1,66 @@
+package controller
+
+import (
+	"context"
+	"fmt"
+
+	"go.miloapis.com/email-provider-loops/internal/util"
+	loops "go.miloapis.com/email-provider-loops/pkg/loops"
+	notificationmiloapiscomv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
+
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+const (
+	// LoopsContactGroupReadyCondition reports, on a contact group that lists Loops, whether Loops has the group's
+	// mailing list
+	LoopsContactGroupReadyCondition = "LoopsContactGroupReady"
+	// LoopsMailingListUnknownReason is set when Loops has no mailing list with the group's ID
+	LoopsMailingListUnknownReason = "MailingListUnknown"
+)
+
+// LoopsContactGroupController reports on each contact group that lists Loops whether Loops has its mailing list, so a
+// group that names a mailing list Loops does not have is seen before anyone joins or leaves it.
+type LoopsContactGroupController struct {
+	Client client.Client
+	Loops  loops.MailingListLister
+}
+
+// Reconcile sets the contact group's Loops condition.
+func (r *LoopsContactGroupController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	cg := &notificationmiloapiscomv1alpha1.ContactGroup{}
+	if err := r.Client.Get(ctx, req.NamespacedName, cg); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("failed to get contactgroup: %w", err)
+	}
+
+	provider, _ := loopsProvider(cg)
+	if _, err := r.Loops.ListMailingLists(ctx); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list Loops mailing lists: %w", err)
+	}
+	cond := metav1.Condition{
+		Type:    LoopsContactGroupReadyCondition,
+		Status:  metav1.ConditionFalse,
+		Reason:  LoopsMailingListUnknownReason,
+		Message: fmt.Sprintf("Loops has no mailing list with ID %q", provider.ID),
+	}
+	return ctrl.Result{}, r.report(ctx, cg, cond)
+}
+
+// report sets cond on the contact group's status, and writes it only when it changed.
+func (r *LoopsContactGroupController) report(ctx context.Context, cg *notificationmiloapiscomv1alpha1.ContactGroup, cond metav1.Condition) error {
+	cond.ObservedGeneration = cg.GetGeneration()
+	err := util.PatchStatusWithLock(ctx, r.Client, cg, func() bool {
+		return meta.SetStatusCondition(&cg.Status.Conditions, cond)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to patch contactgroup status: %w", err)
+	}
+	return nil
+}
