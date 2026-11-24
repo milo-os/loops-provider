@@ -186,6 +186,48 @@ func TestRemoveFromMailingList(t *testing.T) {
 	}
 }
 
+func TestListMailingLists(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("Expected GET request, got %s", r.Method)
+		}
+		if r.URL.Path != "/lists" {
+			t.Errorf("Expected path /lists, got %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			t.Errorf("Expected Authorization header, got %s", r.Header.Get("Authorization"))
+		}
+		// The two mailing lists of Loops' API reference, one with a description and one without.
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(`[
+			{"id":"clm2k8j4h6g0f8d6s4a2b0z8","name":"Product updates","description":"Monthly product news and release notes","isPublic":true},
+			{"id":"list-2","name":"Internal","description":null,"isPublic":false}
+		]`)); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
+	}))
+	defer ts.Close()
+
+	client, _ := NewSDK("test-key", WithBaseURL(ts.URL))
+	got, err := client.ListMailingLists(context.Background())
+	if err != nil {
+		t.Fatalf("ListMailingLists() failed: %v", err)
+	}
+
+	want := []MailingList{
+		{ID: "clm2k8j4h6g0f8d6s4a2b0z8", Name: "Product updates", Description: "Monthly product news and release notes", IsPublic: true},
+		{ID: "list-2", Name: "Internal"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ListMailingLists() = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ListMailingLists()[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestClient_Errors(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

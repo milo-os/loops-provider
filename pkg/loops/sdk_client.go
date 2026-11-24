@@ -186,6 +186,19 @@ func (c *Client) AddToMailingList(ctx context.Context, userID string, listID str
 	return c.UpsertContact(ctx, req)
 }
 
+// ListMailingLists lists the account's mailing lists.
+//
+// API: GET /lists
+//
+// Idempotency: Idempotent
+func (c *Client) ListMailingLists(ctx context.Context) ([]MailingList, error) {
+	var lists []MailingList
+	if err := c.sendRequest(ctx, http.MethodGet, "/lists", nil, &lists); err != nil {
+		return nil, err
+	}
+	return lists, nil
+}
+
 // RemoveFromMailingList removes a contact from a specific mailing list.
 //
 // Convenience wrapper around UpsertContact.
