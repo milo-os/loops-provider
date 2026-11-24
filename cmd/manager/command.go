@@ -200,21 +200,7 @@ func CreateManagerCommand() *cobra.Command {
 				return fmt.Errorf("failed to create Loops client: %w", err)
 			}
 
-			if err = (&controller.LoopsContactController{
-				Client:                          mgr.GetClient(),
-				Loops:                           loopsClient,
-				NewsLetterContactGroupName:      newsLetterContactGroupName,
-				NewsLetterContactGroupNamespace: newsLetterContactGroupNamespace,
-			}).SetupWithManager(mgr); err != nil {
-				setupLog.Error(err, "unable to create controller", "controller", "LoopsContact")
-				return err
-			}
-
-			if err = (&controller.LoopsContactGroupMembershipController{
-				Client: mgr.GetClient(),
-				Loops:  loopsClient,
-			}).SetupWithManager(mgr); err != nil {
-				setupLog.Error(err, "unable to create controller", "controller", "LoopsContactGroupMembership")
+			if err = setupControllers(mgr, loopsClient, newsLetterContactGroupName, newsLetterContactGroupNamespace); err != nil {
 				return err
 			}
 
@@ -283,6 +269,39 @@ func CreateManagerCommand() *cobra.Command {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	return cmd
+}
+
+// setupControllers registers the provider's controllers with the manager.
+func setupControllers(mgr ctrl.Manager, loopsClient *loops.Client, newsLetterContactGroupName, newsLetterContactGroupNamespace string) error {
+	setupLog := ctrl.Log.WithName("setup")
+
+	if err := (&controller.LoopsContactController{
+		Client:                          mgr.GetClient(),
+		Loops:                           loopsClient,
+		NewsLetterContactGroupName:      newsLetterContactGroupName,
+		NewsLetterContactGroupNamespace: newsLetterContactGroupNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "LoopsContact")
+		return err
+	}
+
+	if err := (&controller.LoopsContactGroupMembershipController{
+		Client: mgr.GetClient(),
+		Loops:  loopsClient,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "LoopsContactGroupMembership")
+		return err
+	}
+
+	if err := (&controller.LoopsContactGroupController{
+		Client: mgr.GetClient(),
+		Loops:  loopsClient,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "LoopsContactGroup")
+		return err
+	}
+
+	return nil
 }
 
 const (

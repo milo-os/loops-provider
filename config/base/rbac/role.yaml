@@ -26,6 +26,7 @@ rules:
   - notification.miloapis.com
   resources:
   - contactgroupmemberships/status
+  - contactgroups/status
   - contacts/status
   verbs:
   - get

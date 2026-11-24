@@ -34,6 +34,9 @@ type LoopsContactGroupController struct {
 	Loops  loops.MailingListLister
 }
 
+// +kubebuilder:rbac:groups=notification.miloapis.com,resources=contactgroups,verbs=get;list;watch
+// +kubebuilder:rbac:groups=notification.miloapis.com,resources=contactgroups/status,verbs=get;update;patch
+
 // Reconcile sets the contact group's Loops condition.
 func (r *LoopsContactGroupController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	cg := &notificationmiloapiscomv1alpha1.ContactGroup{}
@@ -81,6 +84,14 @@ func mailingListCondition(id string, lists []loops.MailingList) metav1.Condition
 		Reason:  LoopsMailingListUnknownReason,
 		Message: fmt.Sprintf("Loops has no mailing list with ID %q", id),
 	}
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *LoopsContactGroupController) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&notificationmiloapiscomv1alpha1.ContactGroup{}).
+		Named("loopscontactgroup").
+		Complete(r)
 }
 
 // report sets cond on the contact group's status, and writes it only when it changed.
