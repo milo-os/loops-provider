@@ -23,6 +23,8 @@ const (
 	LoopsMailingListFoundReason = "MailingListFound"
 	// LoopsMailingListUnknownReason is set when Loops has no mailing list with the group's ID
 	LoopsMailingListUnknownReason = "MailingListUnknown"
+	// LoopsMailingListIDMissingReason is set when the group lists Loops without a mailing list ID
+	LoopsMailingListIDMissingReason = "MailingListIDMissing"
 )
 
 // LoopsContactGroupController reports on each contact group that lists Loops whether Loops has its mailing list, so a
@@ -43,6 +45,14 @@ func (r *LoopsContactGroupController) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	provider, _ := loopsProvider(cg)
+	if provider.ID == "" {
+		return ctrl.Result{}, r.report(ctx, cg, metav1.Condition{
+			Type:    LoopsContactGroupReadyCondition,
+			Status:  metav1.ConditionFalse,
+			Reason:  LoopsMailingListIDMissingReason,
+			Message: "The contact group lists Loops but has no mailing list ID",
+		})
+	}
 	lists, err := r.Loops.ListMailingLists(ctx)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to list Loops mailing lists: %w", err)

@@ -77,6 +77,18 @@ func TestReconcileGroup_UnknownMailingListIsReported(t *testing.T) {
 	}
 }
 
+func TestReconcileGroup_LoopsWithoutIDIsReported(t *testing.T) {
+	r, c := newGroupController(t, &listingLoops{lists: accountLists}, groupWith(notificationv1.ContactGroupProviderSpec{Name: "Loops"}))
+
+	if err := reconcileGroup(t, r); err != nil {
+		t.Fatalf("Reconcile() returned an error, so the group would retry for ever: %v", err)
+	}
+	got := groupLoopsReady(t, c)
+	if got == nil || got.Status != metav1.ConditionFalse || got.Reason != LoopsMailingListIDMissingReason {
+		t.Fatalf("Reconcile() did not report the missing mailing list ID on the group: %+v", got)
+	}
+}
+
 func TestReconcileGroup_ListedMailingListIsReady(t *testing.T) {
 	r, c := newGroupController(t, &listingLoops{lists: accountLists}, groupWith(notificationv1.ContactGroupProviderSpec{Name: "Loops", ID: "list-2"}))
 
