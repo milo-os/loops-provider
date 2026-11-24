@@ -19,6 +19,8 @@ const (
 	// LoopsContactGroupReadyCondition reports, on a contact group that lists Loops, whether Loops has the group's
 	// mailing list
 	LoopsContactGroupReadyCondition = "LoopsContactGroupReady"
+	// LoopsMailingListFoundReason is set when Loops has the group's mailing list
+	LoopsMailingListFoundReason = "MailingListFound"
 	// LoopsMailingListUnknownReason is set when Loops has no mailing list with the group's ID
 	LoopsMailingListUnknownReason = "MailingListUnknown"
 )
@@ -41,16 +43,31 @@ func (r *LoopsContactGroupController) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	provider, _ := loopsProvider(cg)
-	if _, err := r.Loops.ListMailingLists(ctx); err != nil {
+	lists, err := r.Loops.ListMailingLists(ctx)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to list Loops mailing lists: %w", err)
 	}
-	cond := metav1.Condition{
+	return ctrl.Result{}, r.report(ctx, cg, mailingListCondition(provider.ID, lists))
+}
+
+// mailingListCondition is the group's Loops condition for the mailing list ID id, given the account's lists.
+func mailingListCondition(id string, lists []loops.MailingList) metav1.Condition {
+	for _, list := range lists {
+		if list.ID == id {
+			return metav1.Condition{
+				Type:    LoopsContactGroupReadyCondition,
+				Status:  metav1.ConditionTrue,
+				Reason:  LoopsMailingListFoundReason,
+				Message: fmt.Sprintf("Loops has mailing list %q", id),
+			}
+		}
+	}
+	return metav1.Condition{
 		Type:    LoopsContactGroupReadyCondition,
 		Status:  metav1.ConditionFalse,
 		Reason:  LoopsMailingListUnknownReason,
-		Message: fmt.Sprintf("Loops has no mailing list with ID %q", provider.ID),
+		Message: fmt.Sprintf("Loops has no mailing list with ID %q", id),
 	}
-	return ctrl.Result{}, r.report(ctx, cg, cond)
 }
 
 // report sets cond on the contact group's status, and writes it only when it changed.

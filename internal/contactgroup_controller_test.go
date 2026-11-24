@@ -76,3 +76,14 @@ func TestReconcileGroup_UnknownMailingListIsReported(t *testing.T) {
 		t.Fatalf("the status message does not name the unknown mailing list: %q", got.Message)
 	}
 }
+
+func TestReconcileGroup_ListedMailingListIsReady(t *testing.T) {
+	r, c := newGroupController(t, &listingLoops{lists: accountLists}, groupWith(notificationv1.ContactGroupProviderSpec{Name: "Loops", ID: "list-2"}))
+
+	if err := reconcileGroup(t, r); err != nil {
+		t.Fatalf("Reconcile() returned an error: %v", err)
+	}
+	if got := groupLoopsReady(t, c); got == nil || got.Status != metav1.ConditionTrue || got.Reason != LoopsMailingListFoundReason {
+		t.Fatalf("Reconcile() did not mark the group ready for a mailing list Loops has: %+v", got)
+	}
+}
