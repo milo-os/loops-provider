@@ -200,7 +200,8 @@ func TestListMailingLists(t *testing.T) {
 		// The two mailing lists of Loops' API reference, one with a description and one without.
 		w.Header().Set("Content-Type", "application/json")
 		if _, err := w.Write([]byte(`[
-			{"id":"clm2k8j4h6g0f8d6s4a2b0z8","name":"Product updates","description":"Monthly product news and release notes","isPublic":true},
+			{"id":"clm2k8j4h6g0f8d6s4a2b0z8","name":"Product updates",
+			 "description":"Monthly product news and release notes","isPublic":true},
 			{"id":"list-2","name":"Internal","description":null,"isPublic":false}
 		]`)); err != nil {
 			t.Errorf("Failed to write response: %v", err)
@@ -215,7 +216,8 @@ func TestListMailingLists(t *testing.T) {
 	}
 
 	want := []MailingList{
-		{ID: "clm2k8j4h6g0f8d6s4a2b0z8", Name: "Product updates", Description: "Monthly product news and release notes", IsPublic: true},
+		{ID: "clm2k8j4h6g0f8d6s4a2b0z8", Name: "Product updates",
+			Description: "Monthly product news and release notes", IsPublic: true},
 		{ID: "list-2", Name: "Internal"},
 	}
 	if len(got) != len(want) {

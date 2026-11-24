@@ -200,7 +200,8 @@ func CreateManagerCommand() *cobra.Command {
 				return fmt.Errorf("failed to create Loops client: %w", err)
 			}
 
-			if err = setupControllers(mgr, loopsClient, newsLetterContactGroupName, newsLetterContactGroupNamespace); err != nil {
+			err = setupControllers(mgr, loopsClient, newsLetterContactGroupName, newsLetterContactGroupNamespace)
+			if err != nil {
 				return err
 			}
 
@@ -272,7 +273,9 @@ func CreateManagerCommand() *cobra.Command {
 }
 
 // setupControllers registers the provider's controllers with the manager.
-func setupControllers(mgr ctrl.Manager, loopsClient *loops.Client, newsLetterContactGroupName, newsLetterContactGroupNamespace string) error {
+func setupControllers(
+	mgr ctrl.Manager, loopsClient *loops.Client, newsLetterContactGroupName, newsLetterContactGroupNamespace string,
+) error {
 	setupLog := ctrl.Log.WithName("setup")
 
 	if err := (&controller.LoopsContactController{
