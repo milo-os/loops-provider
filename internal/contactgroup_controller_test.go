@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -14,6 +16,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // listingLoops answers the list of mailing lists with lists, or with err when it is set.
@@ -97,6 +100,22 @@ func TestReconcileGroup_GroupWithoutLoopsGetsNoCondition(t *testing.T) {
 	}
 	if got := groupLoopsReady(t, c); got != nil {
 		t.Fatalf("Reconcile() set a Loops condition on a group that Loops does not serve: %+v", *got)
+	}
+}
+
+func TestReconcileGroup_FailedLoopsReadIsRetriedAndKeepsTheCondition(t *testing.T) {
+	group := groupWith(notificationv1.ContactGroupProviderSpec{Name: "Loops", ID: "list-1"})
+	group.Status.Conditions = []metav1.Condition{{Type: LoopsContactGroupReadyCondition, Status: metav1.ConditionTrue,
+		Reason: LoopsMailingListFoundReason, Message: `Loops has mailing list "list-1"`, LastTransitionTime: metav1.Now()}}
+	readFailed := &loops.Error{StatusCode: http.StatusInternalServerError, Body: "upstream timeout"}
+	r, c := newGroupController(t, &listingLoops{err: readFailed}, group)
+
+	err := reconcileGroup(t, r)
+	if err == nil || errors.Is(err, reconcile.TerminalError(nil)) {
+		t.Fatalf("Reconcile() returned %v, want an error that is retried", err)
+	}
+	if got := groupLoopsReady(t, c); got == nil || got.Status != metav1.ConditionTrue {
+		t.Fatalf("Reconcile() changed the group's condition on a failed Loops read: %+v", got)
 	}
 }
 
