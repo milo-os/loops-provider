@@ -49,7 +49,7 @@ func (r *LoopsContactGroupController) Reconcile(ctx context.Context, req ctrl.Re
 
 	provider, listed := loopsProvider(cg)
 	if !listed {
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.forget(ctx, cg)
 	}
 	if provider.ID == "" {
 		return ctrl.Result{}, r.report(ctx, cg, metav1.Condition{
@@ -102,6 +102,18 @@ func (r *LoopsContactGroupController) report(ctx context.Context, cg *notificati
 	})
 	if err != nil {
 		return fmt.Errorf("failed to patch contactgroup status: %w", err)
+	}
+	return nil
+}
+
+// forget removes the Loops condition from a contact group that no longer lists Loops, and writes only when the group
+// had one.
+func (r *LoopsContactGroupController) forget(ctx context.Context, cg *notificationmiloapiscomv1alpha1.ContactGroup) error {
+	err := util.PatchStatusWithLock(ctx, r.Client, cg, func() bool {
+		return meta.RemoveStatusCondition(&cg.Status.Conditions, LoopsContactGroupReadyCondition)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to remove the Loops condition from the contactgroup status: %w", err)
 	}
 	return nil
 }

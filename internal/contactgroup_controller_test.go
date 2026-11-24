@@ -103,6 +103,30 @@ func TestReconcileGroup_GroupWithoutLoopsGetsNoCondition(t *testing.T) {
 	}
 }
 
+func TestReconcileGroup_GroupThatStopsListingLoopsLosesItsCondition(t *testing.T) {
+	group := groupWith()
+	group.Status.Conditions = []metav1.Condition{
+		{Type: LoopsContactGroupReadyCondition, Status: metav1.ConditionTrue, Reason: LoopsMailingListFoundReason,
+			Message: `Loops has mailing list "list-1"`, LastTransitionTime: metav1.Now()},
+		{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Reconciled", LastTransitionTime: metav1.Now()},
+	}
+	r, c := newGroupController(t, &listingLoops{lists: accountLists}, group)
+
+	if err := reconcileGroup(t, r); err != nil {
+		t.Fatalf("Reconcile() returned an error for a group that Loops no longer serves: %v", err)
+	}
+	if got := groupLoopsReady(t, c); got != nil {
+		t.Fatalf("Reconcile() kept an out-of-date Loops condition on a group that no longer lists Loops: %+v", *got)
+	}
+	cg := &notificationv1.ContactGroup{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "devs", Namespace: "default"}, cg); err != nil {
+		t.Fatalf("failed to get contact group: %v", err)
+	}
+	if meta.FindStatusCondition(cg.Status.Conditions, "Ready") == nil {
+		t.Fatalf("Reconcile() removed a condition that is not the Loops condition: %+v", cg.Status.Conditions)
+	}
+}
+
 func TestReconcileGroup_FailedLoopsReadIsRetriedAndKeepsTheCondition(t *testing.T) {
 	group := groupWith(notificationv1.ContactGroupProviderSpec{Name: "Loops", ID: "list-1"})
 	group.Status.Conditions = []metav1.Condition{{Type: LoopsContactGroupReadyCondition, Status: metav1.ConditionTrue,
