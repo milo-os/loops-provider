@@ -89,6 +89,17 @@ func TestReconcileGroup_LoopsWithoutIDIsReported(t *testing.T) {
 	}
 }
 
+func TestReconcileGroup_GroupWithoutLoopsGetsNoCondition(t *testing.T) {
+	r, c := newGroupController(t, &listingLoops{lists: accountLists}, groupWith())
+
+	if err := reconcileGroup(t, r); err != nil {
+		t.Fatalf("Reconcile() returned an error for a group that Loops does not serve: %v", err)
+	}
+	if got := groupLoopsReady(t, c); got != nil {
+		t.Fatalf("Reconcile() set a Loops condition on a group that Loops does not serve: %+v", *got)
+	}
+}
+
 func TestReconcileGroup_ListedMailingListIsReady(t *testing.T) {
 	r, c := newGroupController(t, &listingLoops{lists: accountLists}, groupWith(notificationv1.ContactGroupProviderSpec{Name: "Loops", ID: "list-2"}))
 

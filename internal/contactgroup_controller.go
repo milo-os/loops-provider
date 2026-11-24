@@ -44,7 +44,10 @@ func (r *LoopsContactGroupController) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("failed to get contactgroup: %w", err)
 	}
 
-	provider, _ := loopsProvider(cg)
+	provider, listed := loopsProvider(cg)
+	if !listed {
+		return ctrl.Result{}, nil
+	}
 	if provider.ID == "" {
 		return ctrl.Result{}, r.report(ctx, cg, metav1.Condition{
 			Type:    LoopsContactGroupReadyCondition,
