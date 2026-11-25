@@ -16,3 +16,9 @@ type API interface {
 	// RemoveFromMailingList removes a contact from a specific mailing list.
 	RemoveFromMailingList(ctx context.Context, userID string, listID string) (*APIResponse, error)
 }
+
+// MailingListLister lists the account's mailing lists in Loops.
+type MailingListLister interface {
+	// ListMailingLists lists the account's mailing lists.
+	ListMailingLists(ctx context.Context) ([]MailingList, error)
+}

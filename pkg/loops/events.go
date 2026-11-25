@@ -15,7 +15,8 @@ type ContactIdentity struct {
 	UserID string `json:"userId"`
 }
 
-// MailingList represents the mailing list information in webhook events.
+// MailingList represents the mailing list information in webhook events and in the list of the account's mailing
+// lists. Description is empty when the mailing list has none.
 type MailingList struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
